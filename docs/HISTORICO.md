@@ -323,3 +323,29 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   e o jogo segue com a captura dele. Testado nos dois jogos: save da Rota 1, 3 encontros em cada, todos na captura e
   sem crash; com o Pidgey no slot 0, a batalha continua. **Falta:** batalha também sem acompanhante (a correção
   completa).
+
+## Batalha selvagem: o inicial andando sozinho (19/10/2026, issue #6, 0.4.2)
+- **Dois relatos depois da 0.4.1.** O usuário, com o Eevee na frente e o Bulbasaur andando junto, caiu na captura sem
+  precisar: o caso "com acompanhante" tinha sido testado só com o Pidgey movido para o slot 0, e as rodadas com o save
+  dele não acharam encontro (não conferi). O Vaskiemaia, com o Oddish na frente, teve batalha, mas o jogo fechou ao
+  trocar para o Pikachu (vídeo; log com o mesmo `f_7000a9ddc0`, Pikachu).
+- **Vocabulário do jogo.** Nos nativos de script, "partner" é o Pokémon que anda com o jogador e "buddy" é o inicial
+  (`f_70001760d0`: Pikachu forma 8 ou Eevee forma 1). `f_70002462e0(0, &slot)` (o `GetPartnerIndex_`) dá o slot de
+  quem anda junto, não do inicial. No save, o cabeçalho da equipe (`+0x5A00`) tem quem anda junto no slot 0; os
+  blocos do save são conferidos por CRC16-ARC (tabela `FEEB` no fim: tamanho, id, checksum).
+- **A causa.** Em batalha simples, `f_7000a88780` (abertura) e `f_7000a8ced0` (troca) mandam o inicial com
+  `ee422.bseq` (o método virtual `f_7000a7e090` pergunta se é o inicial); os outros vão com `ee420.bseq` (Poké Ball). A
+  `ee422` leva para a batalha o modelo de campo de quem anda junto; com o inicial andando sozinho, a batalha estática
+  não tem esse modelo e `f_7000a9ddb0` lê um nulo. Por isso quebra também na troca.
+- **O que não resolveu.** Os scripts das batalhas estáticas do jogo (`bin/archive/script_amx.gfpak`, AMX de 64 bits em
+  codificação compacta; nomes de nativos pelo hash `h = h * 0x83 ^ byte`, achado no registrador `f_70006705e0`)
+  recolhem quem anda junto e o inicial montado antes do `CallWildBattle` (`StartFollowPartnerIntoTheBall_` =
+  `f_7000243bb0`, `StartRidePartnerIntoTheBall_` = `f_7000243d90`). Chamar isso antes da batalha, com ou sem espera,
+  apagar os dois (`f_7000244440`, `f_7000244620`), fazê-lo reaparecer montado (`f_7000244270`, recusa), outro molde
+  (Electrode) e forçar a `ee420` (ela tem o ramo do inicial no ombro e quebra em `f_7000adc1f0` -> `f_7000a9bf20`)
+  não resolveram.
+- **Correção (proteção, 0.4.2).** No toque (`starter_walks_alone`), se quem anda junto é o próprio inicial (ou ninguém),
+  o encontro vai para a captura do jogo; com outro Pokémon andando junto, batalha, e o inicial pode entrar. A regra da
+  0.4.1 ("inicial no slot 0") sai.
+- **Ferramentas.** `LARECOMP_SCAN_LEN` / `LARECOMP_SCAN_NOPTR` na varredura de memória (docs/DEPURACAO.md).
+  **Lição:** um caso só conta como testado quando o log mostra o evento dele; testar com cópia do save do usuário.

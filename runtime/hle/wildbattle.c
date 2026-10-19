@@ -171,33 +171,52 @@ static void probe_identity(Cpu *c) {
     c->sp = sp;
 }
 
-// The partner's party slot, as the script native GetPartnerIndex_ (f_700019a040) finds it: f_70002462e0(0, &slot)
-// (-1 when it says there is none). The trigger's own arguments are kept.
-#define PARTNER_SLOT 0x70002462e0ull
-static int partner_slot(Cpu *c) {
+// The game's own answers about the party, from inside the trigger (its arguments are kept). In the game's own words the
+// "partner" is the Pokémon walking with the player and the "buddy" is the starter (Pikachu form 8 / Eevee form 1):
+// f_70002462e0(0, &slot) is how the script native GetPartnerIndex_ (f_700019a040) finds the walking one's party slot
+// (-1: none); the script natives PokePartyGetCount (f_7000197e90) and PokePartyIsBuddy (f_7000198b20) are called with a
+// parameter block of their own ({size, arg}, 64-bit cells).
+#define WALKING_SLOT 0x70002462e0ull
+#define NATIVE_PARTY_COUNT 0x7000197e90ull
+#define NATIVE_IS_BUDDY 0x7000198b20ull
+static uint64_t party_call(Cpu *c, uint64_t fn, uint32_t arg, bool native, int *slot) {
     uint64_t keep[19], lr = c->x[30], sp = c->sp;
     memcpy(keep, c->x, sizeof keep);
     c->sp -= 0x20;
-    R32(c->sp, 0x10) = 6;
-    c->x[0] = 0, c->x[1] = c->sp + 0x10;
-    rt_call_original(c, PARTNER_SLOT);
-    int slot = (c->x[0] & 1) ? (int)R32(c->sp, 0x10) : -1;
+    if (native) R64(c->sp, 0x10) = 8, R64(c->sp, 0x18) = arg, c->x[0] = 0, c->x[1] = c->sp + 0x10;
+    else R32(c->sp, 0x10) = 6, c->x[0] = arg, c->x[1] = c->sp + 0x10;
+    rt_call_original(c, fn);
+    uint64_t r = c->x[0];
+    if (slot) *slot = (r & 1) ? (int)R32(c->sp, 0x10) : -1;
     memcpy(c->x, keep, sizeof keep);
     c->x[30] = lr, c->sp = sp;
-    return slot;
+    return r;
+}
+
+// Whether the starter itself is the one walking with the player (early in the game no other Pokémon does: issue #6).
+// The battle sends the starter in with ee422.bseq (f_7000a88780 for the opening, f_7000a8ced0 for a switch), which moves
+// the walking Pokémon's field model into the battle; with the starter walking alone, the static battle - the kind this
+// mode starts - has none for it and the game stops (f_7000a9ddb0 reading a null pointer), whether the starter leads or
+// is switched in. Nothing tried yet makes it work (docs/HISTORICO.md): such touches go to the game's own capture.
+static bool starter_walks_alone(Cpu *c) {
+    int walking;
+    party_call(c, WALKING_SLOT, 0, false, &walking);
+    int n = (int)(uint32_t)party_call(c, NATIVE_PARTY_COUNT, 0, true, NULL), starter = -1;
+    for (int i = 0; i < n && i < 6; i++)
+        if (party_call(c, NATIVE_IS_BUDDY, (uint32_t)i, true, NULL) & 1) { starter = i; break; }
+    LOG("[wild] f%llu party: %d, walking with the player: slot %d, starter: slot %d\n", (unsigned long long)renderer_game_frame(),
+        n, walking, starter);
+    return starter >= 0 && (walking == starter || walking < 0);
 }
 
 static int trigger_hook(Cpu *c, uint64_t addr) {
     (void)addr;
     if (g_active) return 1;  // (swallowed: our battle is running)
     if (g_count >= g_max) return 0;  // (the game's capture runs)
-    // No Pokémon walks alongside the player while the partner is in the first party slot (early in the game, when that
-    // can't be changed yet: issue #6). The static battle's opening is made for one: f_7000a9ddb0 and other commands of its
-    // sequence look the companion up and stop the game without it (a null pointer the code takes as impossible). The
-    // touch then goes to the game's own capture.
-    if (partner_slot(c) == 0) {
-        LOG("[wild] f%llu the partner leads the party (no Pokémon walks alongside): the game's capture\n",
-            (unsigned long long)renderer_game_frame());
+    // The starter walking alone can't enter the static battle (issue #6, above): the game's own capture instead.
+    // LARECOMP_WILDBATTLE_STARTER=1 (research) battles anyway.
+    if (!getenv("LARECOMP_WILDBATTLE_STARTER") && starter_walks_alone(c)) {
+        LOG("[wild] f%llu the starter walks alone with the player: the game's capture\n", (unsigned long long)renderer_game_frame());
         return 0;
     }
     g_count++;

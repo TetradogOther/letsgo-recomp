@@ -161,7 +161,7 @@ Não ligue debug info nos shaders para capturar: com milhares de shaders, o repl
 - **Ganchos** (runtime/fnhook.c): toda função gerada passa por `FN_ENTER`, que chama `rt_fnhook` enquanto houver
   gancho registrado (`rt_register_fnhook(addr, fn)`; `fn` devolve 1 para tratar a chamada no lugar do jogo;
   `rt_call_original` roda a função original de dentro do gancho). Mudar comportamento não exige gerar a DLL de novo.
-- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`): varre a memória mapeada do guest por esses bytes
+- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`; `LARECOMP_SCAN_LEN=<bytes>` loga mais que 0x40 bytes por acerto, `LARECOMP_SCAN_NOPTR=1` pula a busca de ponteiros, que é lenta): varre a memória mapeada do guest por esses bytes
   (ex.: o hash de um registro em little-endian) quando o jogo chega ao frame (padrão 1300) e loga cada acerto, os 0x40
   bytes seguintes, `n` registros de 0x40 antes e os ponteiros para a base (runtime/hle/memscan.c, só Windows).
 - `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` (endereço completo do guest, ex.: `700028ef70`; o offset do `main`
