@@ -2949,6 +2949,15 @@ static void mv_replay_camera(uint64_t fr) {
     mv_set_camera(vp, blk, nw->n, fr);
 }
 
+// A camera whose view (the 64 bytes before the projection) does not move the world: at the origin, as a sky's. Not the
+// scene's. (In battles, every few frames the scene draws' slot holds one - all of their draws that frame - and the
+// scene's camera is nowhere as a projection of its own: the occlusion and the indirect light read the depth with the
+// wrong camera in those frames and the right one in the others, and flickered. Seen at the end of a trainer battle.)
+static bool cam_at_origin(const float *p) {
+    const float *v = p - 16;
+    return fabsf(v[3]) < 1 && fabsf(v[7]) < 1 && fabsf(v[11]) < 1;
+}
+
 // The scene's projection, from the vertex constant buffers of its draws: where it was last found, else a scan (once
 // per frame). Let's Go: row-major, near 32, far 10000 (cm).
 static void ssao_find_projection(void) {
@@ -2962,7 +2971,10 @@ static void ssao_find_projection(void) {
             mv_replay_camera(fr);
             return;
         }
-        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), ao.proj)) {
+        float proj[4];
+        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), proj) &&
+            !cam_at_origin((const float *)(blk + ao.poff))) {
+            memcpy(ao.proj, proj, sizeof ao.proj);
             ao.proj_frame = fr;
             mv_capture_camera((const float *)(blk + ao.poff), blk, bsz, fr);
             return;
@@ -2971,19 +2983,29 @@ static void ssao_find_projection(void) {
     if (ip_replaying) return;  // (no scan there)
     if (ao.scan_frame == fr) return;
     ao.scan_frame = fr;
+    float proj[4];
     for (int b = 0; b < 18; b++) {
         Range u = st.ubuf[0][b];
         if (!u.addr || u.size < 64) continue;
         uint64_t n = u.size > 4096 ? 4096 : u.size;
-        for (uint32_t o = 0; o + 64 <= n; o += 16)
-            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), ao.proj)) {
+        for (uint32_t o = 64; o + 64 <= n; o += 16)
+            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), proj) && !cam_at_origin((const float *)(uintptr_t)(u.addr + o))) {
                 if (ao.pbind != b || ao.poff != o) LOG("[ssao] projection in vertex cbuf %d at %u: near %.3g far %.3g\n", b, o,
-                                                      ao.proj[3] / (ao.proj[2] - 1), ao.proj[3] / (ao.proj[2] + 1));
+                                                      proj[3] / (proj[2] - 1), proj[3] / (proj[2] + 1));
+                memcpy(ao.proj, proj, sizeof ao.proj);
                 ao.pbind = b, ao.poff = o, ao.proj_frame = fr;
                 mv_capture_camera((const float *)(uintptr_t)(u.addr + o), (const uint8_t *)(uintptr_t)u.addr, (uint32_t)u.size, fr);
                 return;
             }
     }
+}
+
+// As the scene pass ends: no camera this frame (above) - the last one, if recent, standing still
+static void ssao_settle_camera(void) {
+    uint64_t fr = fx_frame();
+    if (ao.proj_frame == fr || !ao.vp_frame || ao.vp_frame >= fr || ao.vp_frame + 8 < fr) return;
+    ao.proj_frame = fr;
+    mv_set_camera(ao.vp, ao.scene[ao.scene_cur], ao.scene_size[ao.scene_cur], fr);
 }
 
 // Each draw in the scene pass: opaque ones are counted (and give the projection); the occlusion runs when the pass
@@ -4149,6 +4171,7 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
     uint64_t fr = fx_frame();
+    ssao_settle_camera();
     ao.done_frame = fr;
     TexBackend *d = ao.depth;
     if (ao.proj_frame != fr || !d || !d->image || !(d->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || d->samples > 1) return;
@@ -4279,6 +4302,7 @@ static void taa_run(void) {
     float mo = nvn_depth_mode() == 0 ? 1.0f : 0.0f;
     // the motion vectors again: the blended draws after the scene hook have written their velocities since
     mv_nodump = true;
+    ssao_settle_camera();
     TexBackend *mv = ao.proj_frame == fr ? mv_run(cb, dv, d->width, d->height, mo, fr) : NULL;
     mv_nodump = false;
     cb = vk_cmd();

@@ -5,8 +5,10 @@
 - **Fixes SSAO and GI flickering as the camera moves** (rocks, bushes and characters going in and out of the effect):
   they went onto the scene at its first blended draw after 16 opaque ones, and Let's Go draws blended ones among its
   opaque ones - whatever came after got neither, and that line moved with the view (34 to 68 of about 130 opaque
-  draws walking in Pewter's gym). They now run when the scene pass ends, with every opaque draw in. Checked on Eevee
-  and Pikachu.
+  draws walking in Pewter's gym). They now run when the scene pass ends, with every opaque draw in. In battles they
+  also flickered because every few frames the scene's camera slot held a sky camera at the origin, and the depth was
+  read with it: such a camera is now skipped, and a frame without the scene's camera keeps the previous one. Checked
+  on Eevee and Pikachu.
 - **F12 menu: FSR 3.1 is in the upscaler row again** (Bilinear / FSR 1 / FSR 3.1), as well as in the anti-aliasing
   row; the two follow each other.
 - **Skip controller selection** (launcher, `skip_controller = 1` in `larecomp.ini`; off by default; Eevee and Pikachu
