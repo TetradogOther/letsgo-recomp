@@ -88,7 +88,7 @@ accepted. What was tested:
 | | Supported | Not supported |
 |---|---|---|
 | Game | *Pokémon: Let's Go, Eevee!* (title id `0100187003A36000`) and, since 0.2.1, *Let's Go, Pikachu!* (`010003F003A34000`). Pikachu 1.0.0 was tested here from the setup to the name screen of a new game; a player reported Pikachu 1.0.2 playable up to receiving Pikachu ([issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1)) | |
-| Version | **1.0.0**, the base game, of either: the only builds with the experimental **60 fps** and **wild battles** options, which work on addresses of the game's executable (mapped for both, `tools/addrmap.py`); the launcher greys them out for any other | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates are accepted, without those options, but untested here |
+| Version | **1.0.0**, the base game, of either: the only builds with the experimental **60 fps** and **wild battles** options and **Skip controller selection**, which work on addresses of the game's executable (mapped for both, `tools/addrmap.py`); the launcher greys them out for any other | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates are accepted, without those options, but untested here |
 | Files | the extracted **`exefs`** folder (`main`, `main.npdm`, `rtld`, `sdk`, `subsdk0`, `subsdk1`) and the **`romfs`** folder, or a `romfs.bin` image (both tested) | `.xci`, `.nsp`, `.nsz`, `.xcz` or `.nca` files: extract them first |
 | Region | the same title id is listed in the US, UK, Brazil, Japan, Korea and Hong Kong / Taiwan eShops, with the same two updates for all of them ([titledb](https://github.com/blawar/titledb)). Switch updates are patches over the base game, so every region's 1.0.0 is the same. Tested with one dump, from a cartridge | |
 | Game language | the 9 languages of the game's own language screen, shown when starting a new game: English, Español, Français, Deutsch, Italiano, Japanese, Korean, Simplified and Traditional Chinese (tested). The game warns the choice can't be changed later, and an existing save keeps its language | |
@@ -97,7 +97,7 @@ accepted. What was tested:
 | Extras | the communication screens open without crashing (local trade searches and B goes back; Mystery Gift waits on "Connecting...", which the game gives no way out of offline) | the Poké Ball Plus, Pokémon GO / GO Park transfers, local and online play, Mystery Gift, the second player |
 
 The launcher reads the program id in your `exefs/main.npdm` and refuses anything other than the two games, saying
-why. The 60 fps and wild battles options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
+why. The 60 fps, wild battles and skip controller selection options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
 for Eevee, `1C375692DE4F4B87` for Pikachu).
 
 ## How to play
@@ -335,6 +335,9 @@ Most internal documentation is in Portuguese.
 
 - **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by **Peiikai**: the static recompiler and the runtime this
   project is built on (MIT, [LICENSE-LASRecomp](LICENSE-LASRecomp)). Without it this port would not exist.
+- **Iván Serrano ([@Vancete](https://github.com/Vancete))**: the F12 settings menu (colour, SSAO, GI, shadow filter), motion
+  vectors with TAA and FSR 3.1, the sharper high-resolution text and the 2x interface, FSR 3.1 frame generation, the
+  120 fps mode and the walking speed at 60 / 120 fps, and skipping the controller screen (PRs #8 to #16).
 - **Pokémon Switch Brasil** (Derek and team): the Brazilian Portuguese fan translation used to test translation
   support. Not included; distributed by the group.
 - **Libraries and tools:**

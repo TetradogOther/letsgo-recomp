@@ -38,7 +38,7 @@ static const uint64_t k_pikachu_100[][2] = {
     {0x7000305ad0, 0x7000305aa0}, {0x70006237b0, 0x7000623750}, {0x7000641190, 0x7000641130},
     {0x7000663660, 0x7000663600}, {0x7000664cd0, 0x7000664c70},
     {0x70002462e0, 0x70002462b0}, {0x7000197e90, 0x7000197e60}, {0x7000198b20, 0x7000198af0},
-    {0x70000395f0, 0x70000395f0}, {0x7000039600, 0x7000039600},  // (same place)
+    {0x70000395f0, 0x70000395f0}, {0x7000039600, 0x7000039600}, {0x700004eb50, 0x700004eb50},  // (same place)
 };
 static int g_build = -1;  // GAME_BUILD_* (runtime/gamesetup.h); -1 before the first boot
 
@@ -58,8 +58,11 @@ static void add_hook(uint64_t addr, FnHook fn) {
     if (!addr) return;
     uint32_t s = (uint32_t)((addr >> 2) * 0x9E3779B1u) & (NHOOK - 1);
     while (hooks[s].addr && hooks[s].addr != addr) s = (s + 1) & (NHOOK - 1);
-    hooks[s].addr = addr;
+    // (the function before the address: hooks are also added while the game runs - the F12 menu's frame rate - and a
+    // thread looking the slot up must not find the address without its function)
     hooks[s].fn = fn;
+    atomic_thread_fence(memory_order_release);
+    hooks[s].addr = addr;
     g_fnhook = 1;
 }
 
@@ -78,6 +81,8 @@ add:
 }
 
 void rt_register_fnhook(uint64_t addr, FnHook fn) { reg(addr, fn, false); }
+// A hook at an address of the running build as it is (research: LARECOMP_STEP_SCALE, as LARECOMP_HOOK_DUMP's)
+void rt_register_fnhook_raw(uint64_t addr, FnHook fn) { reg(addr, fn, true); }
 
 void rt_fnhook_set_build(int build) {
     if (build == g_build) return;

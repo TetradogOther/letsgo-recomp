@@ -349,3 +349,38 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   0.4.1 ("inicial no slot 0") sai.
 - **Ferramentas.** `LARECOMP_SCAN_LEN` / `LARECOMP_SCAN_NOPTR` na varredura de memória (docs/DEPURACAO.md).
   **Lição:** um caso só conta como testado quando o log mostra o evento dele; testar com cópia do save do usuário.
+
+## SSAO e GI piscando com a câmera em movimento (19/10/2026, PR #16 do Vancete)
+
+- **Sintoma.** Com a oclusão de ambiente (SSAO) ou a luz indireta (GI) ligadas, partes da cena (pedras, arbustos,
+  personagens) ganhavam e perdiam o efeito enquanto a câmera se mexia, como se ele ligasse e desligasse. Visto pelo
+  usuário na batalha e andando no ginásio de Pewter; já existia antes do PR.
+- **Diagnóstico.** Em partidas automáticas o SSAO rodava em todo quadro, com histórico temporal mantido, e quadros
+  seguidos não destoavam. Um dump da oclusão na batalha (`LARECOMP_SSAO_DUMP`) só tinha as árvores do fundo. Contando
+  os desenhos opacos antes e depois do SSAO em cada quadro: na batalha, 30 antes e 29-30 depois; andando no ginásio de
+  Pewter, de 34 a 68 antes (de cerca de 130), mudando de um quadro para outro.
+- **Causa.** O efeito era aplicado no primeiro desenho translúcido depois de 16 opacos. O Let's Go desenha translúcidos
+  no meio dos opacos, então o que vinha depois ficava sem oclusão e sem luz indireta, e a fronteira andava com a
+  câmera (culling e ordem dos desenhos).
+- **Correção.** O SSAO e a GI rodam quando o passe da cena termina, com todos os opacos desenhados
+  (`ssao_draw_hook`, exec.c). Pewter: 118-128 opacos antes, nenhum depois, em todos os quadros.
+- **Segunda causa (batalhas e capturas).** Depois da primeira correção, ainda piscava na batalha, mais visível na
+  cena da treinadora derrotada. Um build com diagnóstico (o usuário reproduziu, o log contou) mostrou o alvo da cena
+  estável, nenhum desenho fora e o histórico mantido, mas a câmera do quadro mudando: a cada poucos quadros, o slot de
+  constantes dos desenhos da cena (vertex cbuf 5, +64) tinha uma câmera na origem (view sem translação, espelhada,
+  near 16 e sem far: a do céu), em todos os desenhos daquele quadro, e a da cena não estava em slot nenhum como
+  projeção própria. O SSAO e a GI liam a profundidade com essa câmera nesses quadros. A máscara de constantes do
+  shader não ajudou (não marca esse slot nem nos quadros bons).
+- **Correção.** Uma câmera na origem não é a da cena (`cam_at_origin`); sem câmera no quadro, vale a do quadro anterior
+  se tiver até 8 quadros, parada (`ssao_settle_camera`, no fim do passe). Três batalhas: 197 a 554 quadros com a câmera
+  na origem, todos menos 1 a 9 (começo de cena) cobertos.
+- **Efeito colateral corrigido.** Aplicado no fim do passe, o efeito pegava também o fade que o jogo desenha por cima
+  da cena no mesmo alvo: na abertura (fade a partir do branco), a grama aparecia cinza através do branco. Agora ele
+  entra antes do primeiro desenho sem teste de profundidade depois dos opacos (um fade, as passadas de tela cheia), ou
+  no fim do passe; os translúcidos 3D no meio da cena testam profundidade e não disparam. Pewter continua com nenhum
+  opaco depois do efeito.
+- **Não era deste problema.** As faixas horizontais nos quadros escuros da troca de mapa vêm do pacote da interface 2x
+  (somem com `ui2x = 0`, com ou sem SSAO/GI; existem desde a 0.4.0).
+- **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
+- **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
+  ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).

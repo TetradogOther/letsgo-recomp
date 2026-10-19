@@ -697,10 +697,20 @@ static uint64_t ip_replays;  // in-between images rendered
 static float ip_t;           // (where the in-between image is, between N-1 and N: below)
 static uint64_t fx_frame(void) { return renderer_present_count() + ip_replays + (ip_replaying ? 1 : 0); }
 bool vk_interp_enabled(void) { return ip_enabled(); }  // (cmdbuf.c: hooks the game's object draw functions)
+// FSR 3.1 frame generation (F12 menu: frame_gen with FSR 3.1 as the anti-aliasing; LARECOMP_FRAME_GEN=0/1 overrides
+// it): on AMD's swapchain only (device.c switches to it while this is on), generating when FSR 3.1 ran (vk_fg_present)
+bool vk_fg_wanted(void) {
+    static int env = -2;
+    if (env == -2) env = getenv("LARECOMP_FRAME_GEN") ? atoi(getenv("LARECOMP_FRAME_GEN")) != 0 : -1;
+    return env >= 0 ? env : g_settings.frame_gen > 0 && g_settings.antialias == AA_FSR3;
+}
+static bool fg_on(void) { return g_vk.ffx_sc && vk_fg_wanted(); }
+
 static bool ip_enabled(void) {
     // The 60 fps mode (runtime/hle/fps60.c): the world at 60 natively; menus and the Pokédex at the game's 30 with the
     // in-between image; battles and captures at 30 without it (tried, left out: docs/HISTORICO.md 46).
-    // LARECOMP_INTERP=1 (research): always on.
+    // LARECOMP_INTERP=1 (research): always on. Not with frame generation: it makes the in-between images itself.
+    if (fg_on()) return false;
     if (ip_on == -1) ip_on = getenv("LARECOMP_INTERP") ? atoi(getenv("LARECOMP_INTERP")) : 0;
     extern bool fps60_menu(void);
     return ip_on > 0 || fps60_menu();
@@ -863,9 +873,9 @@ static uint32_t tex_wh[2][64][2];
 
 // ================================================================== SSAO hook (F12 menu)
 // The game's 3D scene is one pass into a 16:9 float target with depth (Let's Go: R11G11B10F + D32S8, 1080p scaled):
-// opaque draws first, then blended ones (foliage cards, effects), then bloom and the composite read it. The occlusion
-// goes onto that target once per frame, between the two: before the first blended draw, or when the pass ends if
-// there is none. The projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
+// opaque draws first, then blended ones (foliage cards, effects) - some of them among the opaque ones - then bloom and
+// the composite read it. The occlusion goes onto that target once per frame, when the pass ends (ssao_draw_hook). The
+// projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
 static struct {
     bool qual, busy;           // the pass running now is the scene's; ssao_run is recording
     NvnTexture *tex;           // the scene target of this frame's count of opaque draws
@@ -906,10 +916,16 @@ static VkImageView post_view(TexBackend *d);
 // Per-object motion vectors (level 2) wanted: the camera's are, and the advanced menu's option is on
 static bool mv_wanted(void);
 static bool mvo_wanted(void) { return g_settings.mv_objects && mv_wanted(); }
-// FSR 3's interface mask: the presented image copied (post image 25) before the frame's first interface draw - one into
-// the image that is presented reading none of the scene's (scaled) textures; the present compares the two
+// FSR 3's interface mask (and frame generation's image without the interface): a copy (post image 25) of the image the
+// interface is drawn into, made before the frame's first interface draw - one reading none of the scene's (scaled)
+// render targets; the present compares the two. Menus draw it into the presented image; while playing, the game draws
+// it at the render size into the scaled image its last pass then takes (colour grading) into the presented one
+// (ui_scene_rt: that pass's input, seen the frame before).
 static uint64_t ui_snap_frame;
-static TexBackend *ui_snap;
+static TexBackend *ui_snap, *ui_snap_of;     // the copy, and the image it was made of
+static TexBackend *ui_scene_rt;              // the last pass's scaled input
+static TexBackend *ui_final_src;             // ... seen this frame (ui_final_frame)
+static uint64_t ui_final_frame;
 static VkImageView raw_view(TexBackend *b);
 static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_);
 static bool fsr3_on(void);
@@ -2136,7 +2152,17 @@ static const void *mvo_pd[18];
 static uint32_t mvo_ps[18];
 static bool mvo_all;
 
+// A draw's own arguments in its CmdRec.x (x1..x7 of the call; runtime/nvn/cmdbuf.c fills the ones a shorter call
+// leaves out): elements - mode, index type, count, indices, base vertex, base instance, instances; arrays - mode,
+// first, count, base instance, instances. Past them are leftover registers (and past x[6] the float arguments): a
+// key over those changed from frame to frame for some draws (the player's left eye never found its previous copy).
+static int draw_nargs(bool indexed) { return indexed ? 7 : 5; }
+
 static uint64_t mvo_mix(uint64_t h, uint64_t v) { h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2); return h * 0x100000001B3ull; }
+// this draw without its occurrence (mvo_draw_key), and which occurrence of that it is in the frame
+static uint64_t mvo_base;
+static uint32_t mvo_nth;
+static uint64_t mvo_occ_draw(uint64_t base, uint32_t n) { uint64_t k = mvo_mix(base, n); return k ? k : 1; }
 
 static void mvo_frame_check(void) {
     uint64_t fr = fx_frame();
@@ -2155,14 +2181,14 @@ static uint64_t mvo_draw_key(const CmdRec *r, bool indexed) {
     uint64_t h = mvo_mix(0xcbf29ce484222325ull, (uint64_t)(uintptr_t)st.program);
     h = mvo_mix(h, indexed);
     h = mvo_mix(h, st.vbuf[0].addr);
-    for (int i = 0; i < 8; i++) h = mvo_mix(h, r->x[i]);
+    for (int i = 0; i < draw_nargs(indexed); i++) h = mvo_mix(h, r->x[i]);
     h = mvo_mix(h, st.obj);
     if (!h) h = 1;
     uint32_t s = (uint32_t)(h ^ (h >> 29)) & (MVO_TAB - 1);
     while (mvo_occ_key[s] && mvo_occ_key[s] != h) s = (s + 1) & (MVO_TAB - 1);
     if (!mvo_occ_key[s]) { mvo_occ_key[s] = h; mvo_occ[s] = 0; }
-    uint64_t k = mvo_mix(h, mvo_occ[s]++);
-    return k ? k : 1;
+    mvo_base = h, mvo_nth = mvo_occ[s];
+    return mvo_occ_draw(h, mvo_occ[s]++);
 }
 
 static void mvo_record(int k, const void *src, uint32_t size) {
@@ -2179,18 +2205,75 @@ static void mvo_record(int k, const void *src, uint32_t size) {
     f->tab[s] = ++f->n;
 }
 
-// The previous frame's copy of this draw's vertex cbuf k, if usable (else NULL)
-static const void *mvo_prev(int k, uint32_t *size) {
-    const MvoFrame *f = &mvo[mvo_cur ^ 1];
-    if (!f->tab || f->frame + 1 != mvo[mvo_cur].frame) { mvo_stats[1]++; return NULL; }
-    uint64_t key = mvo_mix(mvo_draw, (uint64_t)k);
+// The previous frame's copy of draw `draw`'s cbuf k (NULL: none)
+static const MvoEntry *mvo_find(const MvoFrame *f, uint64_t draw, int k) {
+    uint64_t key = mvo_mix(draw, (uint64_t)k);
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (MVO_TAB - 1);
-    const MvoEntry *e = NULL;
     while (f->tab[s]) {
         const MvoEntry *c = &f->e[f->tab[s] - 1];
-        if (c->key == key) { e = c; break; }
+        if (c->key == key) return c;
         s = (s + 1) & (MVO_TAB - 1);
     }
+    return NULL;
+}
+
+static bool mvo_prev_ok(void) {
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    return f->tab && f->frame + 1 == mvo[mvo_cur].frame;
+}
+
+// How far a previous copy is from this frame's data: the sum of the float words' differences, stopping past `limit`
+static float mvo_dist(const uint32_t *a, const uint32_t *b, uint32_t nw, float limit) {
+    float d = 0;
+    for (uint32_t i = 0; i < nw && d < limit; i++) {
+        if (a[i] == b[i] || ((a[i] >> 23) & 0xFF) == 0xFF || ((b[i] >> 23) & 0xFF) == 0xFF) continue;
+        float fa, fb;
+        memcpy(&fa, &a[i], 4), memcpy(&fb, &b[i], 4);
+        d += fabsf(fb - fa);
+    }
+    return d;
+}
+
+// Which of the previous frame's draws this one is. A mesh drawn several times without a game object of its own (the
+// flowers and the grass: obj 0) is told apart only by the order of its draws, and that order shifts when one of them
+// is culled or comes into view - the camera moving: the n-th draw then took the previous frame's (n +- 1)-th
+// constants, another bush's, and a vector towards it (frame generation smeared them, pieces of flower beds floating
+// beside them). Of the previous frame's occurrences of the same draw, the one whose vertex cbufs 3+ are closest to
+// this draw's is taken (the same occurrence first, kept unless another is closer).
+static uint64_t mvo_pick(const ShaderInfo *si) {
+    if (!mvo_prev_ok()) return mvo_draw;
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    int k0 = -1;
+    for (int k = 3; k < 18 && k0 < 0; k++)
+        if ((si->cbuf_mask & (1u << k)) && st.ubuf[0][k - 3].addr) k0 = k;
+    if (k0 < 0 || !mvo_find(f, mvo_occ_draw(mvo_base, mvo_nth ? 0 : 1), k0)) return mvo_draw;  // (one occurrence: itself)
+    uint64_t pick = mvo_draw;
+    float best = INFINITY;
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t n = i == 0 ? mvo_nth : i - 1 < mvo_nth ? i - 1 : i;  // (this occurrence first, then all the others)
+        uint64_t cand = mvo_occ_draw(mvo_base, n);
+        if (i > 0 && !mvo_find(f, cand, k0)) break;  // (past the previous frame's last occurrence)
+        float d = 0;
+        bool whole = true;
+        for (int k = k0; k < 18 && d < best; k++) {
+            if (!(si->cbuf_mask & (1u << k))) continue;
+            Range r = st.ubuf[0][k - 3];
+            const MvoEntry *e = mvo_find(f, cand, k);
+            if (!e || !r.addr) { whole = false; break; }
+            d += mvo_dist((const uint32_t *)(f->data + e->off), (const uint32_t *)(uintptr_t)r.addr,
+                          (uint32_t)((r.size < e->size ? r.size : e->size) / 4), best - d);
+        }
+        if (whole && d < best) best = d, pick = cand;
+        if (best == 0) break;
+    }
+    return pick;
+}
+
+// The previous frame's copy of the vertex cbuf k of draw `draw` (mvo_pick), if usable (else NULL)
+static const void *mvo_prev(uint64_t draw, int k, uint32_t *size) {
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    if (!mvo_prev_ok()) { mvo_stats[1]++; return NULL; }
+    const MvoEntry *e = mvo_find(f, draw, k);
     Range r = k - 3 >= 0 && k - 3 < 18 ? st.ubuf[0][k - 3] : (Range){0, 0};
     static long probe_at = -2;
     if (probe_at == -2) probe_at = getenv("LARECOMP_MVO_PROBE") ? atol(getenv("LARECOMP_MVO_PROBE")) : -1;
@@ -2235,10 +2318,11 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 // Before a velocity draw's descriptors: its vertex cbufs' previous copies, all or none
 static void mvo_check(const ShaderInfo *si) {
     mvo_all = true;
+    uint64_t prev = mvo_pick(si);
     for (int k = 3; k < 18; k++) {
         mvo_pd[k] = NULL;
         if (!(si->cbuf_mask & (1u << k))) continue;
-        mvo_pd[k] = mvo_prev(k, &mvo_ps[k]);
+        mvo_pd[k] = mvo_prev(prev, k, &mvo_ps[k]);
         if (!mvo_pd[k]) mvo_all = false;
     }
 }
@@ -2784,6 +2868,15 @@ static void mv_capture_camera(const float *p, const uint8_t *blk, uint32_t blk_s
             vp[r * 4 + c] = s;
         }
     uint32_t n = blk ? (blk_size < sizeof ao.scene[0] ? blk_size : (uint32_t)sizeof ao.scene[0]) : 0;
+    {   // LARECOMP_CAM_LOG=1 (research): the camera's position in the world (cm) each frame - it follows the player,
+        // so its speed is the walking speed (tools/walk_speed.sh: the same at 30, 60 and 120 fps?)
+        static int cam_log = -1;
+        if (cam_log < 0) cam_log = getenv("LARECOMP_CAM_LOG") != NULL;
+        if (cam_log)  // (row-major rigid view: position = -R^T t)
+            LOG("[cam] present %llu pos %.2f %.2f %.2f\n", (unsigned long long)renderer_present_count(),
+                -(v[0] * v[3] + v[4] * v[7] + v[8] * v[11]), -(v[1] * v[3] + v[5] * v[7] + v[9] * v[11]),
+                -(v[2] * v[3] + v[6] * v[7] + v[10] * v[11]));
+    }
     {   // (a real frame's: the in-between image after it blends this one with the one before)
         CamReal *c = &cam_real[cam_ri ^= 1];
         memcpy(c->vp, vp, sizeof vp);
@@ -2856,6 +2949,15 @@ static void mv_replay_camera(uint64_t fr) {
     mv_set_camera(vp, blk, nw->n, fr);
 }
 
+// A camera whose view (the 64 bytes before the projection) does not move the world: at the origin, as a sky's. Not the
+// scene's. (In battles, every few frames the scene draws' slot holds one - all of their draws that frame - and the
+// scene's camera is nowhere as a projection of its own: the occlusion and the indirect light read the depth with the
+// wrong camera in those frames and the right one in the others, and flickered. Seen at the end of a trainer battle.)
+static bool cam_at_origin(const float *p) {
+    const float *v = p - 16;
+    return fabsf(v[3]) < 1 && fabsf(v[7]) < 1 && fabsf(v[11]) < 1;
+}
+
 // The scene's projection, from the vertex constant buffers of its draws: where it was last found, else a scan (once
 // per frame). Let's Go: row-major, near 32, far 10000 (cm).
 static void ssao_find_projection(void) {
@@ -2869,7 +2971,10 @@ static void ssao_find_projection(void) {
             mv_replay_camera(fr);
             return;
         }
-        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), ao.proj)) {
+        float proj[4];
+        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), proj) &&
+            !cam_at_origin((const float *)(blk + ao.poff))) {
+            memcpy(ao.proj, proj, sizeof ao.proj);
             ao.proj_frame = fr;
             mv_capture_camera((const float *)(blk + ao.poff), blk, bsz, fr);
             return;
@@ -2878,14 +2983,16 @@ static void ssao_find_projection(void) {
     if (ip_replaying) return;  // (no scan there)
     if (ao.scan_frame == fr) return;
     ao.scan_frame = fr;
+    float proj[4];
     for (int b = 0; b < 18; b++) {
         Range u = st.ubuf[0][b];
         if (!u.addr || u.size < 64) continue;
         uint64_t n = u.size > 4096 ? 4096 : u.size;
-        for (uint32_t o = 0; o + 64 <= n; o += 16)
-            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), ao.proj)) {
+        for (uint32_t o = 64; o + 64 <= n; o += 16)
+            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), proj) && !cam_at_origin((const float *)(uintptr_t)(u.addr + o))) {
                 if (ao.pbind != b || ao.poff != o) LOG("[ssao] projection in vertex cbuf %d at %u: near %.3g far %.3g\n", b, o,
-                                                      ao.proj[3] / (ao.proj[2] - 1), ao.proj[3] / (ao.proj[2] + 1));
+                                                      proj[3] / (proj[2] - 1), proj[3] / (proj[2] + 1));
+                memcpy(ao.proj, proj, sizeof ao.proj);
                 ao.pbind = b, ao.poff = o, ao.proj_frame = fr;
                 mv_capture_camera((const float *)(uintptr_t)(u.addr + o), (const uint8_t *)(uintptr_t)u.addr, (uint32_t)u.size, fr);
                 return;
@@ -2893,15 +3000,26 @@ static void ssao_find_projection(void) {
     }
 }
 
-// Each draw in the scene pass: opaque ones are counted (and give the projection); the first blended one after enough
-// of them ends the pass, which runs the occlusion (vk_end_pass). True: the pass must begin again.
+// As the scene pass ends: no camera this frame (above) - the last one, if recent, standing still
+static void ssao_settle_camera(void) {
+    uint64_t fr = fx_frame();
+    if (ao.proj_frame == fr || !ao.vp_frame || ao.vp_frame >= fr || ao.vp_frame + 8 < fr) return;
+    ao.proj_frame = fr;
+    mv_set_camera(ao.vp, ao.scene[ao.scene_cur], ao.scene_size[ao.scene_cur], fr);
+}
+
+// Each draw in the scene pass: opaque ones are counted (and give the projection); the occlusion runs when the pass
+// ends (vk_end_pass), with all of them drawn. (It ran at the first blended draw after 16 opaque ones: Let's Go draws
+// blended ones among its opaque ones, and how many opaque draws came before the first changes with the view - 34 to 68
+// of about 130 walking in Pewter's gym - so the objects drawn after it went in and out of the occlusion and the
+// indirect light from one frame to the next: rocks and characters flickered as the camera moved.) A draw without the
+// depth test after them is no longer the 3D scene - a fade drawn over it (the title screen's from white), the game's
+// full-screen passes: the occlusion goes in before it (at the pass's end it went onto the fade too: grass showed
+// through the title's white). True: the pass must begin again.
 static bool ssao_draw_hook(void) {
     if (ao.busy || ao.done_frame == fx_frame()) return false;
-    if (!(st.color_state[0] & 1)) {
-        if (st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
-        return false;
-    }
-    if (ao.opaque < 16) return false;
+    if (!(st.color_state[0] & 1) && st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
+    if (st.ds[0] || ao.opaque < 16) return false;
     vk_end_pass();
     return true;
 }
@@ -2915,7 +3033,7 @@ static void draw_(CmdRec *r, bool indexed) {
         // drawn for two objects (bushes, Pidgeys) is told apart by the object, not by the order the game drew them in
         uint64_t h = 0xcbf29ce484222325ull ^ (uint64_t)(uintptr_t)st.program ^ ((uint64_t)indexed << 63);
         h = (h ^ st.vbuf[0].addr) * 0x100000001B3ull;
-        for (int i = 0; i < 8; i++) h = (h ^ r->x[i]) * 0x100000001B3ull;
+        for (int i = 0; i < draw_nargs(indexed); i++) h = (h ^ r->x[i]) * 0x100000001B3ull;
         if (st.obj) h = (h ^ st.obj) * 0x100000001B3ull, ip_stats_tagged++;
         else ip_stats_untagged++;
         ip_draw_sig = h;
@@ -3746,8 +3864,9 @@ static VkDescriptorSetLayout post_set_layout;
 // fmt: the output's format; blend 1: the output multiplies what is there (SSAO onto the game's scene, colour only),
 // 2: replaces the colour, 3: is added to it (GI)
 static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
-    static struct { const char *fs; VkFormat fmt; int blend; VkPipeline p; } cache[16];
-    for (int i = 0; i < 16; i++) if (cache[i].p && cache[i].fs == fs && cache[i].fmt == fmt && cache[i].blend == blend) return cache[i].p;
+    // (about 30 passes: with 16 entries, FSR 3.1 + frame generation + SSAO + GI made some of them again every frame)
+    static struct { const char *fs; VkFormat fmt; int blend; VkPipeline p; } cache[64];
+    for (int i = 0; i < 64; i++) if (cache[i].p && cache[i].fs == fs && cache[i].fmt == fmt && cache[i].blend == blend) return cache[i].p;
     if (!post_layout) {
         VkDescriptorSetLayoutBinding b[4];
         for (uint32_t i = 0; i < 4; i++)
@@ -3797,7 +3916,7 @@ static VkPipeline post_pipeline_ex(const char *fs, VkFormat fmt, int blend) {
                                        .pColorBlendState = &cb, .pDynamicState = &dy, .layout = post_layout};
     VkPipeline p;
     VK_CHECK(vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p));
-    for (int i = 0; i < 16; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].fmt = fmt; cache[i].blend = blend; cache[i].p = p; break; }
+    for (int i = 0; i < 64; i++) if (!cache[i].p) { cache[i].fs = fs; cache[i].fmt = fmt; cache[i].blend = blend; cache[i].p = p; break; }
     return p;
 }
 static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK_FORMAT_R8G8B8A8_UNORM, 0); }
@@ -3806,9 +3925,11 @@ static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK
 // 3, 4: FSR EASU / RCAS, 5: colour adjustment, 6, 7: SSAO (occlusion, blur), 8: motion vectors (RGBA16F),
 // 9: their RGBA8 encoding (LARECOMP_MV_DUMP), 10, 11: SSAO history (RG16F, ping-pong), 12, 13: the debug views,
 // 14-19: GI (normals, work, history, debug: gi_run), 20: the scene pass's velocity target (per-object motion vectors), 21, 22: TAA history, 23: the scene depth as R32F, 24: FSR 3's output (storage), 25: the image
-// before the interface, 26: FSR 3's interface mask.
+// before the interface, 26: FSR 3's interface mask, 27: frame generation's image without the interface (FSR 3's
+// output size), 28, 29: the same in the window (swapchain format, ping-pong: read at the present after), 30, 31: frame
+// generation's depth and motion vectors upside down (the window's orientation).
 static TexBackend *post_image_fmt(int i, uint32_t w, uint32_t h, VkFormat fmt) {
-    static TexBackend img[27];
+    static TexBackend img[32];
     TexBackend *d = &img[i];
     if (d->image && (d->width != w || d->height != h || d->format != fmt)) {
         vk_views_forget(d);
@@ -4051,11 +4172,12 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
     }
 }
 
-// The scene hook (outside any pass: vk_end_pass, ssao_draw_hook), once per frame between the scene's opaque and blended
-// draws: camera motion vectors, then the occlusion - from the depth at its size -> blur across -> blur down ->
+// The scene hook (outside any pass: vk_end_pass), once per frame as the scene pass ends: camera motion vectors, the
+// indirect light, then the occlusion - from the depth at its size -> blur across -> blur down ->
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
     uint64_t fr = fx_frame();
+    ssao_settle_camera();
     ao.done_frame = fr;
     TexBackend *d = ao.depth;
     if (ao.proj_frame != fr || !d || !d->image || !(d->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || d->samples > 1) return;
@@ -4077,7 +4199,7 @@ static void ssao_run(void) {
         bool temporal = g_settings.ssao_temporal && mv;
         float turn = temporal ? (float)fmod((double)fr * 0.6180339887, 1.0) : 0.0f;
         float pc[12] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity, mo,
-                        0.08f * (float)h, turn};
+                        0.08f * (float)h, turn, (float)g_settings.ssao_samples};
         post_pass_view(cb, p_ao, &dv, 1, post_view(a0), w, h, pc, sizeof pc, false, false);
         float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};
         VkImageView bx[4] = {post_view(a0), dv};
@@ -4186,6 +4308,7 @@ static void taa_run(void) {
     float mo = nvn_depth_mode() == 0 ? 1.0f : 0.0f;
     // the motion vectors again: the blended draws after the scene hook have written their velocities since
     mv_nodump = true;
+    ssao_settle_camera();
     TexBackend *mv = ao.proj_frame == fr ? mv_run(cb, dv, d->width, d->height, mo, fr) : NULL;
     mv_nodump = false;
     cb = vk_cmd();
@@ -4216,16 +4339,24 @@ static void taa_run(void) {
 
 static void ui_snapshot_check(Prog *pr) {
     uint64_t fr = fx_frame();
-    if (ui_snap_frame == fr || !st.rt.ncolor || !st.rt.color[0] || !renderer_texture_presented(st.rt.color[0])) return;
-    if (!pr->fi->ntex) return;  // (an untextured fill: a fade, not the interface)
-    for (int i = 0; i < pr->fi->ntex && i < 64; i++) {  // reading a scaled texture: the scene's composite, not the interface
-        NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
-        float sx = 1, sy = 1;
-        if (t) renderer_texture_scale(t, &sx, &sy);
-        if (sx != 1 || sy != 1) return;
-    }
+    if (!st.rt.ncolor || !st.rt.color[0]) return;
     TexBackend *tb = st.rt.color[0]->backend;
     if (!tb || !tb->image) return;
+    bool presented = renderer_texture_presented(st.rt.color[0]);
+    if (!presented && tb != ui_scene_rt) return;
+    if (!pr->fi->ntex) return;  // (an untextured fill: a fade, not the interface)
+    // reading a scaled render target: the scene's composite, not the interface (the interface's own 2x images and the
+    // high-resolution text cache are scaled too, and are the interface: runtime/ui2x.c, font_hires.c)
+    for (int i = 0; i < pr->fi->ntex && i < 64; i++) {
+        NvnTexture *t = shader_texture_object(1, &pr->fi->tex[i]);
+        TexBackend *b = t ? t->backend : NULL;
+        if (b && b->scalable && (b->sx != 1 || b->sy != 1)) {
+            if (presented && b->width == tb->width && b->height == tb->height)  // (the last pass: its input, at this size)
+                ui_final_src = ui_scene_rt = b, ui_final_frame = fr;
+            return;
+        }
+    }
+    if (ui_snap_frame == fr) return;
     vk_end_pass();
     VkCommandBuffer cb = vk_cmd();
     TexBackend *snap = post_image(25, tb->width, tb->height);
@@ -4233,9 +4364,18 @@ static void ui_snapshot_check(Prog *pr) {
     VkImageView src[4] = {raw_view(tb)};
     post_pass_view(cb, post_pipeline("copy.frag"), src, 1, post_view(snap), tb->width, tb->height, pk, 32, false, false);
     vk_full_barrier(cb);
-    ui_snap_frame = fr, ui_snap = snap;
+    ui_snap_frame = fr, ui_snap = snap, ui_snap_of = tb;
     st.rt_dirty = true;  // (the pass begins again for this draw)
 }
+
+// Frame generation's inputs of this present: post_process (FSR 3 ran, ok), vk_present_draw (where it went, drawn),
+// taken by vk_fg_present
+static struct {
+    bool ok, drawn;
+    Fsr3FrameGen g;
+    TexBackend *src;  // the game image without its interface, as the present samples it
+    float vx, vy, vw, vh, pv[8];
+} fgp;
 
 // The view the present samples: the game image, or its anti-aliased / upscaled version. ow x oh: the whole image's
 // size in the window (its crop is drawn into the viewport).
@@ -4315,9 +4455,13 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
         vk_full_barrier(cb);
         float A = ao.proj[2], B = ao.proj[3];
         VkImage mask = VK_NULL_HANDLE;
-        if (ui_snap_frame == fr && ui_snap && ui_snap->width == b->width && ui_snap->height == b->height) {
-            TexBackend *m = post_image(26, b->width, b->height);
-            VkImageView mi[4] = {raw_view(b), post_view(ui_snap)};
+        TexBackend *mt = NULL;
+        // the image the copy was made of, as it is now: the presented one, or the last pass's input (before its colour
+        // grading, like the copy)
+        TexBackend *now = ui_snap_of == b ? b : ui_snap_of == ui_final_src && ui_final_frame == fr ? ui_final_src : NULL;
+        if (ui_snap_frame == fr && ui_snap && now && ui_snap->width == b->width && ui_snap->height == b->height) {
+            TexBackend *m = mt = post_image(26, b->width, b->height);
+            VkImageView mi[4] = {raw_view(now), post_view(ui_snap)};
             post_pass_view(cb, post_pipeline("ui_mask.frag"), mi, 2, post_view(m), b->width, b->height, pz, 32, false, false);
             vk_full_barrier(cb);
             mask = m->image;
@@ -4342,6 +4486,47 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
             vk_full_barrier(cb);
             v = post_view(out), rb_ = out;
             fsr3_engaged = true, fsr3_rw = b->width, fsr3_rh = b->height, fsr3_ow = ow;
+            if (fg_on()) {  // frame generation: this frame's image without the interface, and FSR 3's inputs (vk_fg_present)
+                TexBackend *hl = out;
+                if (mt) {
+                    hl = post_image(27, ow, oh);
+                    float ph[8] = {0, 0, 0, 0, 1.0f / (float)ow, 1.0f / (float)oh};
+                    VkImageView hi[4] = {post_view(out), post_view(ui_snap), post_view(mt)};
+                    post_pass_view(cb, post_pipeline("hudless.frag"), hi, 3, post_view(hl), ow, oh, ph, 32, false, false);
+                    vk_full_barrier(cb);
+                }
+                static long hl_dump = -2;  // (LARECOMP_FG_HUDLESS_DUMP=<frame>: it -> build/frames/hudless_<frame>.png)
+                if (hl_dump == -2) hl_dump = getenv("LARECOMP_FG_HUDLESS_DUMP") ? atol(getenv("LARECOMP_FG_HUDLESS_DUMP")) : -1;
+                if (hl_dump >= 0 && (long)fr == hl_dump) {
+                    char path[64];
+                    snprintf(path, sizeof path, "build/frames/hudless_%05ld.png", hl_dump);
+                    renderer_save_texture_tex(hl, path);
+                    cb = vk_cmd();
+                }
+                fgp.g = (Fsr3FrameGen){.depth = d.depth, .mv = d.mv, .rw = d.rw, .rh = d.rh, .mvw = d.mvw, .mvh = d.mvh,
+                                       .jx = d.jx, .jy = d.jy, .mv_scale_x = d.mv_scale_x, .mv_scale_y = d.mv_scale_y,
+                                       .near_ = d.near_, .far_ = d.far_, .fov_y = d.fov_y,
+                                       .meters_per_unit = d.meters_per_unit, .reset = d.reset};
+                // The generation works on the window image, and the present turns the game image upside down when its
+                // origin is the lower left (Let's Go's): the depth and the vectors upside down too, their y and the
+                // jitter's negated. (Left as they were, every vertical motion went the wrong way: extreme ghosting
+                // walking up or down, none sideways.) LARECOMP_FG_NOFLIP=1: as before, to compare.
+                static int noflip = -1;
+                if (noflip < 0) noflip = getenv("LARECOMP_FG_NOFLIP") != NULL;
+                if (renderer_origin_lower_left() && !noflip) {
+                    TexBackend *df = post_image_fmt(30, d.rw, d.rh, VK_FORMAT_R32_SFLOAT);
+                    TexBackend *mf = post_image_fmt(31, d.mvw, d.mvh, VK_FORMAT_R16G16B16A16_SFLOAT);
+                    float one[8] = {1}, neg[8] = {-1};
+                    VkImageView di = post_view(dr), mi = post_view(mv);
+                    post_pass_view(cb, post_pipeline_ex("flip_y.frag", VK_FORMAT_R32_SFLOAT, 0), &di, 1, post_view(df), d.rw, d.rh,
+                                   one, 32, false, false);
+                    post_pass_view(cb, post_pipeline_ex("flip_y.frag", VK_FORMAT_R16G16B16A16_SFLOAT, 0), &mi, 1, post_view(mf),
+                                   d.mvw, d.mvh, neg, 32, false, false);
+                    vk_full_barrier(cb);
+                    fgp.g.depth = df->image, fgp.g.mv = mf->image, fgp.g.jy = -d.jy;
+                }
+                fgp.src = hl, fgp.ok = true;
+            }
         } else {
             fsr3_engaged = false;
             fsr = true;  // (FSR 1 below, this time)
@@ -4378,7 +4563,12 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
     double ow = pv[6] > 0 ? vw / pv[6] : vw, oh = pv[7] > 0 ? vh / pv[7] : vh;
     VkImageView src = ip_post_view(b, ow, oh);  // (frame N after its in-between image: processed before the replay)
+    fgp.ok = fgp.drawn = false;
     if (!src) src = post_process(cb, b, ow, oh);
+    if (fgp.ok) {
+        fgp.drawn = true, fgp.vx = vx, fgp.vy = vy, fgp.vw = vw, fgp.vh = vh;
+        memcpy(fgp.pv, pv, sizeof fgp.pv);
+    }
     VkPipeline p = present_pipeline(g_vk.sc_format);
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
     VkDescriptorImageInfo ii = {vk_default_sampler(true), src, VK_IMAGE_LAYOUT_GENERAL};
@@ -4393,6 +4583,58 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     vkCmdDraw(cb, 3, 1, 0, 0);
     VkViewport full = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &full);
+}
+
+// Frame generation, as the window image is presented (device.c vk_frame_end, inside its rendering): the window image
+// without the interface, drawn as vk_present_draw drew the game image (the same place, black around it; the overlay
+// menu is not in it, so it counts as interface too), then FSR 3.1's frame generation set up for this present. Without
+// FSR 3 this frame (start screen, a menu without the scene): no frame generated before it. True: one is.
+bool vk_fg_present(void) {
+    if (!fg_on()) return false;
+    bool ok = fgp.ok && fgp.drawn && fgp.src && fgp.src->image;
+    fgp.ok = fgp.drawn = false;
+    uint32_t sw = g_vk.sc_extent.width, sh = g_vk.sc_extent.height;
+    if (!ok) { fsr3_fg_frame(vk_cmd(), g_vk.swapchain, g_vk.sc_format, sw, sh, NULL); return false; }
+    extern void vk_frame_suspend(void);
+    extern void vk_frame_resume(void);
+    vk_frame_suspend();
+    VkCommandBuffer cb = vk_cmd();
+    static int pp;
+    pp ^= 1;
+    TexBackend *hw = post_image_fmt(28 + pp, sw, sh, g_vk.sc_format);
+    VkPipeline p = present_pipeline(g_vk.sc_format);
+    vk_full_barrier(cb);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = post_view(hw),
+                                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL, .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE, .clearValue.color.float32 = {0, 0, 0, 1}};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {sw, sh}}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    vkCmdBeginRendering(cb, &ri);
+    VkDescriptorSet ds = vk_alloc_set(present_set_layout);
+    VkDescriptorImageInfo ii = {vk_default_sampler(true), post_view(fgp.src), VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
+                              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    vkUpdateDescriptorSets(g_vk.dev, 1, &w, 0, NULL);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
+    VkViewport vp = {fgp.vx, fgp.vy, fgp.vw, fgp.vh, 0, 1};
+    VkRect2D sc = {{0, 0}, {sw, sh}};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 32, fgp.pv);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdEndRendering(cb);
+    vk_full_barrier(cb);
+    // the area generated: the game image's place, within the window
+    double x0 = fmax(0, floor(fgp.vx)), y0 = fmax(0, floor(fgp.vy));
+    double x1 = fmin(sw, ceil(fgp.vx + fgp.vw)), y1 = fmin(sh, ceil(fgp.vy + fgp.vh));
+    fgp.g.hudless = hw->image;
+    fgp.g.gx = (int32_t)x0, fgp.g.gy = (int32_t)y0;
+    fgp.g.gw = x1 > x0 ? (uint32_t)(x1 - x0) : sw, fgp.g.gh = y1 > y0 ? (uint32_t)(y1 - y0) : sh;
+    bool on = fsr3_fg_frame(cb, g_vk.swapchain, g_vk.sc_format, sw, sh, &fgp.g);
+    vk_full_barrier(cb);
+    vk_frame_resume();
+    return on;
 }
 
 // Screenshot of a game texture (presented crop applied to build/frame_* shots), via the present shader into RGBA8.
