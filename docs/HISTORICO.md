@@ -349,3 +349,21 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   0.4.1 ("inicial no slot 0") sai.
 - **Ferramentas.** `LARECOMP_SCAN_LEN` / `LARECOMP_SCAN_NOPTR` na varredura de memória (docs/DEPURACAO.md).
   **Lição:** um caso só conta como testado quando o log mostra o evento dele; testar com cópia do save do usuário.
+
+## SSAO e GI piscando com a câmera em movimento (19/10/2026, PR #16 do Vancete)
+
+- **Sintoma.** Com a oclusão de ambiente (SSAO) ou a luz indireta (GI) ligadas, partes da cena (pedras, arbustos,
+  personagens) ganhavam e perdiam o efeito enquanto a câmera se mexia, como se ele ligasse e desligasse. Visto pelo
+  usuário na batalha e andando no ginásio de Pewter; já existia antes do PR.
+- **Diagnóstico.** Em partidas automáticas o SSAO rodava em todo quadro, com histórico temporal mantido, e quadros
+  seguidos não destoavam. Um dump da oclusão na batalha (`LARECOMP_SSAO_DUMP`) só tinha as árvores do fundo. Contando
+  os desenhos opacos antes e depois do SSAO em cada quadro: na batalha, 30 antes e 29-30 depois; andando no ginásio de
+  Pewter, de 34 a 68 antes (de cerca de 130), mudando de um quadro para outro.
+- **Causa.** O efeito era aplicado no primeiro desenho translúcido depois de 16 opacos. O Let's Go desenha translúcidos
+  no meio dos opacos, então o que vinha depois ficava sem oclusão e sem luz indireta, e a fronteira andava com a
+  câmera (culling e ordem dos desenhos).
+- **Correção.** O SSAO e a GI rodam quando o passe da cena termina, com todos os opacos desenhados
+  (`ssao_draw_hook`, exec.c). Pewter: 118-128 opacos antes, nenhum depois, em todos os quadros.
+- **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
+- **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
+  ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).

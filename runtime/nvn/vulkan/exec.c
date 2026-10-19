@@ -873,9 +873,9 @@ static uint32_t tex_wh[2][64][2];
 
 // ================================================================== SSAO hook (F12 menu)
 // The game's 3D scene is one pass into a 16:9 float target with depth (Let's Go: R11G11B10F + D32S8, 1080p scaled):
-// opaque draws first, then blended ones (foliage cards, effects), then bloom and the composite read it. The occlusion
-// goes onto that target once per frame, between the two: before the first blended draw, or when the pass ends if
-// there is none. The projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
+// opaque draws first, then blended ones (foliage cards, effects) - some of them among the opaque ones - then bloom and
+// the composite read it. The occlusion goes onto that target once per frame, when the pass ends (ssao_draw_hook). The
+// projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
 static struct {
     bool qual, busy;           // the pass running now is the scene's; ssao_run is recording
     NvnTexture *tex;           // the scene target of this frame's count of opaque draws
@@ -2986,17 +2986,14 @@ static void ssao_find_projection(void) {
     }
 }
 
-// Each draw in the scene pass: opaque ones are counted (and give the projection); the first blended one after enough
-// of them ends the pass, which runs the occlusion (vk_end_pass). True: the pass must begin again.
-static bool ssao_draw_hook(void) {
-    if (ao.busy || ao.done_frame == fx_frame()) return false;
-    if (!(st.color_state[0] & 1)) {
-        if (st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
-        return false;
-    }
-    if (ao.opaque < 16) return false;
-    vk_end_pass();
-    return true;
+// Each draw in the scene pass: opaque ones are counted (and give the projection); the occlusion runs when the pass
+// ends (vk_end_pass), with all of them drawn. (It ran at the first blended draw after 16 opaque ones: Let's Go draws
+// blended ones among its opaque ones, and how many opaque draws came before the first changes with the view - 34 to 68
+// of about 130 walking in Pewter's gym - so the objects drawn after it went in and out of the occlusion and the
+// indirect light from one frame to the next: rocks and characters flickered as the camera moved.)
+static void ssao_draw_hook(void) {
+    if (ao.busy || ao.done_frame == fx_frame()) return;
+    if (!(st.color_state[0] & 1) && st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
 }
 
 static void draw_(CmdRec *r, bool indexed) {
@@ -3088,7 +3085,7 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
     begin_pass();
-    if (ao.qual && ssao_draw_hook()) begin_pass();  // (the occlusion went in before this draw: the pass again)
+    if (ao.qual) ssao_draw_hook();
     // per-object motion vectors: the scene pass's depth-tested draws that are opaque, or blended but writing depth (the
     // door and window frames, foliage cards: what is seen there is them), take the program's velocity variant
     bool wvel = ao.vel && st.ds[0] && (!(st.color_state[0] & 1) || st.ds[1]);
@@ -4147,8 +4144,8 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
     }
 }
 
-// The scene hook (outside any pass: vk_end_pass, ssao_draw_hook), once per frame between the scene's opaque and blended
-// draws: camera motion vectors, then the occlusion - from the depth at its size -> blur across -> blur down ->
+// The scene hook (outside any pass: vk_end_pass), once per frame as the scene pass ends: camera motion vectors, the
+// indirect light, then the occlusion - from the depth at its size -> blur across -> blur down ->
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
     uint64_t fr = fx_frame();
