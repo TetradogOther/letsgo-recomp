@@ -302,3 +302,24 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   Diferença média acima de 16 (0..255): a imagem fica de fora. Mais de 10% de fora: não sai pacote, e a tela inicial
   diz que o ampliador falhou e para tentar de novo. Medido: imagens boas até 7,2; o lixo da falha entre 66 e 188.
   Três gerações seguidas com a conferência: 0 imagens de fora.
+
+## Batalha selvagem quebrava no começo do jogo (19/10/2026, issue #6)
+- **Sintoma.** Com "Batalhas selvagens" ligado, o jogo fechava com `exception c0000005 accessing 0x78` logo depois de
+  "A wild ... appeared!", antes do "Go on, ...!". Relato no Pikachu (Rattata nível 3, Rota 1); o jogador disse que um mod
+  do Gamebanana dava o mesmo.
+- **Diagnóstico.** O loop de capturas (`tools/capture_loop.py`, `wild_battle=1`) com um save da Rota 1 (0:11 de jogo, só
+  Eevee parceiro e um Pidgey) reproduziu nos dois jogos; com saves mais avançados, na mesma Rota 1, não. O crash é em
+  `f_7000a9ddb0` (chamada pelo comando de sequência de batalha `f_7000aeebb0`): ela procura um componente do Pokémon que
+  anda junto, não acha e passa um ponteiro nulo adiante. Tratar esse nulo (e o do setter `f_7000155870(0, 0)` que o
+  próprio código chama nesse caminho, e que tem armadilhas do compilador como escrita em `0x130`) só levou o crash para
+  outro comando (`f_7000adc4c0` -> `f_7000a9a8e0`): a abertura da batalha estática foi feita contando com o acompanhante.
+  As flags do objeto da batalha (`a3..a6`) não mudam isso. Trocar a ordem da equipe no menu (Pidgey no slot 0) fez a
+  batalha correr normal. Os nomes dos nativos de script (`PokePartyIsPartner`, `GetPartnerIndex_` = `f_700019a040`) deram
+  a função que diz o slot do parceiro, `f_70002462e0(0, &slot)`. No save, o cabeçalho da equipe fica em `+0x5A00`
+  (6 índices e, em `+0x0C`, o do parceiro) e os Pokémon em `+0x5C00 + índice x 0x104`; a cópia viva do jogo é outra.
+- **Causa.** Quando o parceiro está no primeiro slot nenhum Pokémon anda junto (no começo do jogo isso nem pode ser
+  mudado), e a abertura da batalha estática não prevê esse caso.
+- **Correção (proteção).** No toque (`trigger_hook`), se o parceiro está no slot 0, o modo selvagem não monta a batalha
+  e o jogo segue com a captura dele. Testado nos dois jogos: save da Rota 1, 3 encontros em cada, todos na captura e
+  sem crash; com o Pidgey no slot 0, a batalha continua. **Falta:** batalha também sem acompanhante (a correção
+  completa).

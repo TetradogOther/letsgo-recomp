@@ -62,6 +62,13 @@
   driver's swapchain is used as before. Tested in Pallet Town at 30 and 60 fps with FSR 3.1, TAA, SSAO and GI, and in
   full screen at 4K (the swapchain made again): same images, same frame pacing.
 
+## 0.4.1 (2026-10-19)
+
+- **Wild battles no longer crash early in the game** (#6): with the partner in the first party slot no Pokémon walks
+  alongside the player, and the battle's opening was made for one (the game stopped right after "A wild ... appeared!").
+  Until that case is supported, those encounters go to the game's own capture. Checked on both games with a Route 1
+  save (3 encounters each, all to the capture); with another Pokémon in the first slot, the battles run as before.
+
 ## 0.4.0 (2026-10-19)
 
 - **Fixes the world drawn wrong after a catch** (0.3.2): black trees with yellow stripes, bushes with a sign's texture

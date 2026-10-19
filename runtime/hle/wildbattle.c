@@ -171,10 +171,35 @@ static void probe_identity(Cpu *c) {
     c->sp = sp;
 }
 
+// The partner's party slot, as the script native GetPartnerIndex_ (f_700019a040) finds it: f_70002462e0(0, &slot)
+// (-1 when it says there is none). The trigger's own arguments are kept.
+#define PARTNER_SLOT 0x70002462e0ull
+static int partner_slot(Cpu *c) {
+    uint64_t keep[19], lr = c->x[30], sp = c->sp;
+    memcpy(keep, c->x, sizeof keep);
+    c->sp -= 0x20;
+    R32(c->sp, 0x10) = 6;
+    c->x[0] = 0, c->x[1] = c->sp + 0x10;
+    rt_call_original(c, PARTNER_SLOT);
+    int slot = (c->x[0] & 1) ? (int)R32(c->sp, 0x10) : -1;
+    memcpy(c->x, keep, sizeof keep);
+    c->x[30] = lr, c->sp = sp;
+    return slot;
+}
+
 static int trigger_hook(Cpu *c, uint64_t addr) {
     (void)addr;
     if (g_active) return 1;  // (swallowed: our battle is running)
     if (g_count >= g_max) return 0;  // (the game's capture runs)
+    // No Pokémon walks alongside the player while the partner is in the first party slot (early in the game, when that
+    // can't be changed yet: issue #6). The static battle's opening is made for one: f_7000a9ddb0 and other commands of its
+    // sequence look the companion up and stop the game without it (a null pointer the code takes as impossible). The
+    // touch then goes to the game's own capture.
+    if (partner_slot(c) == 0) {
+        LOG("[wild] f%llu the partner leads the party (no Pokémon walks alongside): the game's capture\n",
+            (unsigned long long)renderer_game_frame());
+        return 0;
+    }
     g_count++;
     if (getenv("LARECOMP_WILDBATTLE_PROBE")) probe_identity(c);
     uint64_t lr = c->x[30];
