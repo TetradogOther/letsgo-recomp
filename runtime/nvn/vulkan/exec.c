@@ -3012,10 +3012,16 @@ static void ssao_settle_camera(void) {
 // ends (vk_end_pass), with all of them drawn. (It ran at the first blended draw after 16 opaque ones: Let's Go draws
 // blended ones among its opaque ones, and how many opaque draws came before the first changes with the view - 34 to 68
 // of about 130 walking in Pewter's gym - so the objects drawn after it went in and out of the occlusion and the
-// indirect light from one frame to the next: rocks and characters flickered as the camera moved.)
-static void ssao_draw_hook(void) {
-    if (ao.busy || ao.done_frame == fx_frame()) return;
+// indirect light from one frame to the next: rocks and characters flickered as the camera moved.) A draw without the
+// depth test after them is no longer the 3D scene - a fade drawn over it (the title screen's from white), the game's
+// full-screen passes: the occlusion goes in before it (at the pass's end it went onto the fade too: grass showed
+// through the title's white). True: the pass must begin again.
+static bool ssao_draw_hook(void) {
+    if (ao.busy || ao.done_frame == fx_frame()) return false;
     if (!(st.color_state[0] & 1) && st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
+    if (st.ds[0] || ao.opaque < 16) return false;
+    vk_end_pass();
+    return true;
 }
 
 static void draw_(CmdRec *r, bool indexed) {
@@ -3107,7 +3113,7 @@ static void draw_(CmdRec *r, bool indexed) {
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
     begin_pass();
-    if (ao.qual) ssao_draw_hook();
+    if (ao.qual && ssao_draw_hook()) begin_pass();  // (the occlusion went in before this draw: the pass again)
     // per-object motion vectors: the scene pass's depth-tested draws that are opaque, or blended but writing depth (the
     // door and window frames, foliage cards: what is seen there is them), take the program's velocity variant
     bool wvel = ao.vel && st.ds[0] && (!(st.color_state[0] & 1) || st.ds[1]);

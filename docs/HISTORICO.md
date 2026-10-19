@@ -374,6 +374,13 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
 - **Correção.** Uma câmera na origem não é a da cena (`cam_at_origin`); sem câmera no quadro, vale a do quadro anterior
   se tiver até 8 quadros, parada (`ssao_settle_camera`, no fim do passe). Três batalhas: 197 a 554 quadros com a câmera
   na origem, todos menos 1 a 9 (começo de cena) cobertos.
+- **Efeito colateral corrigido.** Aplicado no fim do passe, o efeito pegava também o fade que o jogo desenha por cima
+  da cena no mesmo alvo: na abertura (fade a partir do branco), a grama aparecia cinza através do branco. Agora ele
+  entra antes do primeiro desenho sem teste de profundidade depois dos opacos (um fade, as passadas de tela cheia), ou
+  no fim do passe; os translúcidos 3D no meio da cena testam profundidade e não disparam. Pewter continua com nenhum
+  opaco depois do efeito.
+- **Não era deste problema.** As faixas horizontais nos quadros escuros da troca de mapa vêm do pacote da interface 2x
+  (somem com `ui2x = 0`, com ou sem SSAO/GI; existem desde a 0.4.0).
 - **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
 - **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
   ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).

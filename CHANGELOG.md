@@ -7,7 +7,8 @@ Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete),
 - **Fixes SSAO and GI flickering as the camera moves** (rocks, bushes and characters going in and out of the effect):
   they went onto the scene at its first blended draw after 16 opaque ones, and Let's Go draws blended ones among its
   opaque ones - whatever came after got neither, and that line moved with the view (34 to 68 of about 130 opaque
-  draws walking in Pewter's gym). They now run when the scene pass ends, with every opaque draw in. In battles they
+  draws walking in Pewter's gym). They now run when the 3D scene ends, with every opaque draw in (and before a fade
+  drawn over it, such as the title screen's from white). In battles they
   also flickered because every few frames the scene's camera slot held a sky camera at the origin, and the depth was
   read with it: such a camera is now skipped, and a frame without the scene's camera keeps the previous one. Checked
   on Eevee and Pikachu.
