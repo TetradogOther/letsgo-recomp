@@ -2152,7 +2152,17 @@ static const void *mvo_pd[18];
 static uint32_t mvo_ps[18];
 static bool mvo_all;
 
+// A draw's own arguments in its CmdRec.x (x1..x7 of the call; runtime/nvn/cmdbuf.c fills the ones a shorter call
+// leaves out): elements - mode, index type, count, indices, base vertex, base instance, instances; arrays - mode,
+// first, count, base instance, instances. Past them are leftover registers (and past x[6] the float arguments): a
+// key over those changed from frame to frame for some draws (the player's left eye never found its previous copy).
+static int draw_nargs(bool indexed) { return indexed ? 7 : 5; }
+
 static uint64_t mvo_mix(uint64_t h, uint64_t v) { h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2); return h * 0x100000001B3ull; }
+// this draw without its occurrence (mvo_draw_key), and which occurrence of that it is in the frame
+static uint64_t mvo_base;
+static uint32_t mvo_nth;
+static uint64_t mvo_occ_draw(uint64_t base, uint32_t n) { uint64_t k = mvo_mix(base, n); return k ? k : 1; }
 
 static void mvo_frame_check(void) {
     uint64_t fr = fx_frame();
@@ -2171,14 +2181,14 @@ static uint64_t mvo_draw_key(const CmdRec *r, bool indexed) {
     uint64_t h = mvo_mix(0xcbf29ce484222325ull, (uint64_t)(uintptr_t)st.program);
     h = mvo_mix(h, indexed);
     h = mvo_mix(h, st.vbuf[0].addr);
-    for (int i = 0; i < 8; i++) h = mvo_mix(h, r->x[i]);
+    for (int i = 0; i < draw_nargs(indexed); i++) h = mvo_mix(h, r->x[i]);
     h = mvo_mix(h, st.obj);
     if (!h) h = 1;
     uint32_t s = (uint32_t)(h ^ (h >> 29)) & (MVO_TAB - 1);
     while (mvo_occ_key[s] && mvo_occ_key[s] != h) s = (s + 1) & (MVO_TAB - 1);
     if (!mvo_occ_key[s]) { mvo_occ_key[s] = h; mvo_occ[s] = 0; }
-    uint64_t k = mvo_mix(h, mvo_occ[s]++);
-    return k ? k : 1;
+    mvo_base = h, mvo_nth = mvo_occ[s];
+    return mvo_occ_draw(h, mvo_occ[s]++);
 }
 
 static void mvo_record(int k, const void *src, uint32_t size) {
@@ -2195,18 +2205,75 @@ static void mvo_record(int k, const void *src, uint32_t size) {
     f->tab[s] = ++f->n;
 }
 
-// The previous frame's copy of this draw's vertex cbuf k, if usable (else NULL)
-static const void *mvo_prev(int k, uint32_t *size) {
-    const MvoFrame *f = &mvo[mvo_cur ^ 1];
-    if (!f->tab || f->frame + 1 != mvo[mvo_cur].frame) { mvo_stats[1]++; return NULL; }
-    uint64_t key = mvo_mix(mvo_draw, (uint64_t)k);
+// The previous frame's copy of draw `draw`'s cbuf k (NULL: none)
+static const MvoEntry *mvo_find(const MvoFrame *f, uint64_t draw, int k) {
+    uint64_t key = mvo_mix(draw, (uint64_t)k);
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (MVO_TAB - 1);
-    const MvoEntry *e = NULL;
     while (f->tab[s]) {
         const MvoEntry *c = &f->e[f->tab[s] - 1];
-        if (c->key == key) { e = c; break; }
+        if (c->key == key) return c;
         s = (s + 1) & (MVO_TAB - 1);
     }
+    return NULL;
+}
+
+static bool mvo_prev_ok(void) {
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    return f->tab && f->frame + 1 == mvo[mvo_cur].frame;
+}
+
+// How far a previous copy is from this frame's data: the sum of the float words' differences, stopping past `limit`
+static float mvo_dist(const uint32_t *a, const uint32_t *b, uint32_t nw, float limit) {
+    float d = 0;
+    for (uint32_t i = 0; i < nw && d < limit; i++) {
+        if (a[i] == b[i] || ((a[i] >> 23) & 0xFF) == 0xFF || ((b[i] >> 23) & 0xFF) == 0xFF) continue;
+        float fa, fb;
+        memcpy(&fa, &a[i], 4), memcpy(&fb, &b[i], 4);
+        d += fabsf(fb - fa);
+    }
+    return d;
+}
+
+// Which of the previous frame's draws this one is. A mesh drawn several times without a game object of its own (the
+// flowers and the grass: obj 0) is told apart only by the order of its draws, and that order shifts when one of them
+// is culled or comes into view - the camera moving: the n-th draw then took the previous frame's (n +- 1)-th
+// constants, another bush's, and a vector towards it (frame generation smeared them, pieces of flower beds floating
+// beside them). Of the previous frame's occurrences of the same draw, the one whose vertex cbufs 3+ are closest to
+// this draw's is taken (the same occurrence first, kept unless another is closer).
+static uint64_t mvo_pick(const ShaderInfo *si) {
+    if (!mvo_prev_ok()) return mvo_draw;
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    int k0 = -1;
+    for (int k = 3; k < 18 && k0 < 0; k++)
+        if ((si->cbuf_mask & (1u << k)) && st.ubuf[0][k - 3].addr) k0 = k;
+    if (k0 < 0 || !mvo_find(f, mvo_occ_draw(mvo_base, mvo_nth ? 0 : 1), k0)) return mvo_draw;  // (one occurrence: itself)
+    uint64_t pick = mvo_draw;
+    float best = INFINITY;
+    for (uint32_t i = 0; i < 1024; i++) {
+        uint32_t n = i == 0 ? mvo_nth : i - 1 < mvo_nth ? i - 1 : i;  // (this occurrence first, then all the others)
+        uint64_t cand = mvo_occ_draw(mvo_base, n);
+        if (i > 0 && !mvo_find(f, cand, k0)) break;  // (past the previous frame's last occurrence)
+        float d = 0;
+        bool whole = true;
+        for (int k = k0; k < 18 && d < best; k++) {
+            if (!(si->cbuf_mask & (1u << k))) continue;
+            Range r = st.ubuf[0][k - 3];
+            const MvoEntry *e = mvo_find(f, cand, k);
+            if (!e || !r.addr) { whole = false; break; }
+            d += mvo_dist((const uint32_t *)(f->data + e->off), (const uint32_t *)(uintptr_t)r.addr,
+                          (uint32_t)((r.size < e->size ? r.size : e->size) / 4), best - d);
+        }
+        if (whole && d < best) best = d, pick = cand;
+        if (best == 0) break;
+    }
+    return pick;
+}
+
+// The previous frame's copy of the vertex cbuf k of draw `draw` (mvo_pick), if usable (else NULL)
+static const void *mvo_prev(uint64_t draw, int k, uint32_t *size) {
+    const MvoFrame *f = &mvo[mvo_cur ^ 1];
+    if (!mvo_prev_ok()) { mvo_stats[1]++; return NULL; }
+    const MvoEntry *e = mvo_find(f, draw, k);
     Range r = k - 3 >= 0 && k - 3 < 18 ? st.ubuf[0][k - 3] : (Range){0, 0};
     static long probe_at = -2;
     if (probe_at == -2) probe_at = getenv("LARECOMP_MVO_PROBE") ? atol(getenv("LARECOMP_MVO_PROBE")) : -1;
@@ -2251,10 +2318,11 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
 // Before a velocity draw's descriptors: its vertex cbufs' previous copies, all or none
 static void mvo_check(const ShaderInfo *si) {
     mvo_all = true;
+    uint64_t prev = mvo_pick(si);
     for (int k = 3; k < 18; k++) {
         mvo_pd[k] = NULL;
         if (!(si->cbuf_mask & (1u << k))) continue;
-        mvo_pd[k] = mvo_prev(k, &mvo_ps[k]);
+        mvo_pd[k] = mvo_prev(prev, k, &mvo_ps[k]);
         if (!mvo_pd[k]) mvo_all = false;
     }
 }
@@ -2940,7 +3008,7 @@ static void draw_(CmdRec *r, bool indexed) {
         // drawn for two objects (bushes, Pidgeys) is told apart by the object, not by the order the game drew them in
         uint64_t h = 0xcbf29ce484222325ull ^ (uint64_t)(uintptr_t)st.program ^ ((uint64_t)indexed << 63);
         h = (h ^ st.vbuf[0].addr) * 0x100000001B3ull;
-        for (int i = 0; i < 8; i++) h = (h ^ r->x[i]) * 0x100000001B3ull;
+        for (int i = 0; i < draw_nargs(indexed); i++) h = (h ^ r->x[i]) * 0x100000001B3ull;
         if (st.obj) h = (h ^ st.obj) * 0x100000001B3ull, ip_stats_tagged++;
         else ip_stats_untagged++;
         ip_draw_sig = h;

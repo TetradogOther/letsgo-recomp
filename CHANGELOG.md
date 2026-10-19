@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Fixes the ghosting on the player's left eye with FSR 3.1, TAA and frame generation**: per-object motion vectors pair
+  a draw with its previous frame's by a key over its arguments, and that key read one word past them - two of the
+  call's float registers, leftovers that alternated from frame to frame for the eye. It never found its previous
+  constants, took the camera's vector (none for a walking character) and was smeared behind the face. Three other
+  draw groups were missed every frame the same way (an NPC's part, the hedge by the fence, a ground decal). The key
+  now takes the draw's own arguments only (7 for indexed draws, 5 for arrays); the 60 fps in-between image's draw
+  signature too. Pallet Town, 100 frames: 512 misses -> 7.
+- **Fixes flowers and grass smeared by frame generation (and FSR 3.1 / TAA) while the camera moves**: a mesh drawn many
+  times without a game object of its own (the flower bushes, the grass) was paired with the previous frame by the order
+  of its draws, and that order shifts by one whenever a copy is culled or comes into view: each bush then took a
+  neighbour's previous constants and a vector towards it - the generated frames showed flower beds in blocks and
+  pieces of them floating beside. Of the previous frame's copies of the same draw, the one with the closest constants
+  is now taken. Pallet Town, walking with the camera moving, the frame where a bush leaves the view: reprojection error
+  on the flower bed 4.99 -> 1.76 (pixels off by more than 40: 2187 -> 375); jump rejections over the run 196 -> 84;
+  no change in speed.
 - **Fixes walking speed at 60 and 120 fps**: the player walked at ~85 % of the speed at 60 fps and ~53 % at 120. The
   player moves by the walking animation's root motion (time-based) plus, once per world update, an offset of its own
   (f_700021b6f0 of Pikachu 1.0.0: -2 cm while running, sized for a 33.3 ms update) - 60 cm/s off the animation's
