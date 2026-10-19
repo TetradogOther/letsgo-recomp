@@ -159,6 +159,12 @@ void settings_apply_levels(void) {
     if (g_settings.frame_gen != 0 && g_settings.frame_gen != 2) g_settings.frame_gen = 2;
 }
 
+// One larecomp.ini line applied now, then the settings that follow from it (LARECOMP_SET_AT: runtime/nvn/vulkan/device.c)
+void settings_set_line(const char *line) {
+    parse_line(line);
+    settings_apply_levels();
+}
+
 void settings_load(void) {
     static bool loaded;
     if (loaded) return;

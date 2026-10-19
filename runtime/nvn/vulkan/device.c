@@ -820,6 +820,24 @@ void backend_present(NvnTexture *t) {
             if (*p == ',') p++; else break;
         }
     }
+    {   // LARECOMP_SET_AT="<present>:<key> = <value>;...": a larecomp.ini line applied at that present, as the F12 menu
+        // changes a setting while the game runs (tests of switching one: SSAO / GI levels, the anti-aliasing...)
+        const char *e = getenv("LARECOMP_SET_AT");
+        for (const char *p = e; p && *p;) {
+            long at = strtol(p, (char **)&p, 10);
+            const char *end = strchr(p, ';');
+            if (*p == ':' && at == (long)total_frames) {
+                char line[160];
+                int n = (int)(end ? end - p - 1 : (long)strlen(p + 1));
+                snprintf(line, sizeof line, "%.*s", n < 0 ? 0 : n, p + 1);
+                extern void settings_set_line(const char *line);
+                settings_set_line(line);
+                LOG("[vk] setting \"%s\" (LARECOMP_SET_AT)\n", line);
+            }
+            if (!end) break;
+            p = end + 1;
+        }
+    }
     {   // LARECOMP_RENDERDOC_AT=<frame>: under RenderDoc (renderdoccmd capture), capture the frame after that one
         extern void renderdoc_frame(uint64_t frame);
         renderdoc_frame(total_frames);

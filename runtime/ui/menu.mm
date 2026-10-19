@@ -588,9 +588,26 @@ static void cfg_draw(ImGuiIO &io, float scale) {
         // runtime/nvn/vulkan/exec.c taa_run)
         // FSR 3.1 last: temporal (jittered scene, motion vectors, the interface masked: exec.c, fsr3.cpp), it anti-aliases
         // and upscales a lower render resolution (its mode, below). Otherwise the upscaler picked below: FSR 1 or bilinear.
+        // The upscaler row offers FSR 3.1 too (where it was before it became an anti-aliasing): the same choice, the two
+        // rows follow each other; leaving FSR 3.1 there brings back the anti-aliasing it replaced.
+        static int last_aa = AA_SMAA;
+        if (g_settings.antialias != AA_FSR3) last_aa = g_settings.antialias;
         const char *aa[] = {M("Off", "Desligado", "Выкл."), "SMAA", "TAA", "FSR 3.1"};
         cfg_row(labels[2], x);
         if (ImGui::Combo("##aa", &g_settings.antialias, aa, 4)) settings_apply_levels();
+        {   // (a render resolution below the window's: FSR 3.1's mode, or the start screen's)
+            const char *up[] = {M("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
+            int u = g_settings.antialias == AA_FSR3 ? 2 : g_settings.upscaler_pick == UPSCALE_BILINEAR ? 0 : 1;
+            cfg_row(labels[8], x);
+            if (ImGui::Combo("##up", &u, up, 3)) {
+                if (u == 2) g_settings.antialias = AA_FSR3;
+                else {
+                    g_settings.upscaler_pick = u ? UPSCALE_SHARP : UPSCALE_BILINEAR;
+                    if (g_settings.antialias == AA_FSR3) g_settings.antialias = last_aa;
+                }
+                settings_apply_levels();
+            }
+        }
         // FSR 3.1's presets: the render resolution is the window's divided by the ratio (runtime/nvn/output_scale.c)
         if (g_settings.antialias == AA_FSR3) {
             const char *pr[] = {M("Native AA (1.0x)", "AA nativo (1,0x)", "Нативное AA (1,0x)"),
@@ -600,11 +617,6 @@ static void cfg_draw(ImGuiIO &io, float scale) {
                                 M("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
             cfg_row(labels[4], x);
             ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
-        } else {  // (a render resolution below the window's: the start screen's)
-            const char *up[] = {M("Bilinear", "Bilinear", "Билинейный"), "FSR 1"};
-            int u = g_settings.upscaler_pick == UPSCALE_BILINEAR ? 0 : 1;
-            cfg_row(labels[8], x);
-            if (ImGui::Combo("##up", &u, up, 2)) g_settings.upscaler_pick = u ? UPSCALE_SHARP : UPSCALE_BILINEAR;
         }
         // FSR 3.1 frame generation (exec.c vk_fg_present; AMD's swapchain is switched to at the next frame: device.c). FSR
         // 3.1 makes one frame between two (several is FSR 4's, which has no Vulkan version): off or 2x.

@@ -86,6 +86,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_FNWATCH=<endereço>` + `LARECOMP_FNWATCH_FNS=<fn>,...` | (pesquisa) registra quando o float muda durante uma dessas funções (com várias threads, a função pode não ser a que escreve: prefira `LARECOMP_WATCH`) |
 | `LARECOMP_WATCH_AT=<presente>`, `LARECOMP_WATCH_MAX=<n>`, `LARECOMP_WATCH_LIKE=<presente>:<endereço>` | o `LARECOMP_WATCH` só a partir daquele presente; só as n primeiras escritas; e todas as palavras dos heaps com o valor daquele endereço naquele presente vigiadas (a varredura roda no presente, na thread do jogo). As escritas de até 16 bytes que cobrem a palavra (vetores SIMD) agora contam |
 | `LARECOMP_FPS_AT=<present>:<fps>,...` | muda o limite de quadros (30/60/120) naqueles presents, como o menu F12 |
+| `LARECOMP_SET_AT="<present>:<chave>=<valor>;..."` | aplica uma linha do `larecomp.ini` naquele present, como o menu F12 muda uma opção com o jogo rodando (ex.: `1300:ssao_level=3;1400:aa=taa`; sem espaços, para caber numa variável) |
 | `LARECOMP_MENU_PAGE=cfg/adv` | com `LARECOMP_MENU_AT`: abre a página principal / avançada do menu F12 em vez do menu de pausa |
 | `LARECOMP_FG_ONLY_GENERATED=1` | a janela mostra só os quadros gerados (para vê-los: `tools/fg_walk.sh` captura a janela da área de trabalho em quadros dados, com o jogo em velocidade real) |
 | `LARECOMP_FG_NOFLIP=1` | (comparação) a geração de quadros recebe a profundidade e os vetores sem inverter em y, como antes da correção: fantasma enorme em movimento vertical |
