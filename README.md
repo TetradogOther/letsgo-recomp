@@ -335,6 +335,9 @@ Most internal documentation is in Portuguese.
 
 - **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by **Peiikai**: the static recompiler and the runtime this
   project is built on (MIT, [LICENSE-LASRecomp](LICENSE-LASRecomp)). Without it this port would not exist.
+- **Iván Serrano ([@Vancete](https://github.com/Vancete))**: the F12 settings menu (colour, SSAO, GI, shadow filter), motion
+  vectors with TAA and FSR 3.1, the sharper high-resolution text and the 2x interface, FSR 3.1 frame generation, the
+  120 fps mode and the walking speed at 60 / 120 fps, and skipping the controller screen (PRs #8 to #16).
 - **Pokémon Switch Brasil** (Derek and team): the Brazilian Portuguese fan translation used to test translation
   support. Not included; distributed by the group.
 - **Libraries and tools:**

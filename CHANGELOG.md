@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16).
+
 - **Fixes SSAO and GI flickering as the camera moves** (rocks, bushes and characters going in and out of the effect):
   they went onto the scene at its first blended draw after 16 opaque ones, and Let's Go draws blended ones among its
   opaque ones - whatever came after got neither, and that line moved with the view (34 to 68 of about 130 opaque
