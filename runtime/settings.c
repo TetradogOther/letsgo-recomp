@@ -113,6 +113,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
     else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
     else if (!strcmp(key, "wild_battle")) g_settings.wild_battle = atoi(val) != 0;
+    else if (!strcmp(key, "skip_controller")) g_settings.skip_controller = atoi(val) != 0;
     else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
 }
 
@@ -224,6 +225,7 @@ void settings_save(void) {
     fprintf(f, "vertex_read = %s\n", g_settings.vertex_read == VREAD_DIRECT ? "direct" : g_settings.vertex_read == VREAD_COPY ? "copy" : "auto");
     fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
     fprintf(f, "wild_battle = %d\n", g_settings.wild_battle);
+    fprintf(f, "skip_controller = %d\n", g_settings.skip_controller);
     fprintf(f, "game_lang = %s\n", g_settings.game_lang);
     bind_settings_save(f);
     fclose(f);

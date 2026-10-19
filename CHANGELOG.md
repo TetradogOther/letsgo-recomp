@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Skip controller selection** (launcher, `skip_controller = 1` in `larecomp.ini`; off by default; Eevee and Pikachu
+  1.0.0): the game starts at the Game Freak logo with the controller already chosen, without "Press a button on the
+  controller you want to use" and its confirmation - no button is pressed for it. The start sequence's controller
+  step (f_700004eb50, the same address in both games) asks in mode 1 and only checks the players' controllers in mode
+  0; it is turned to 0 before its first run, and finds the runtime's one controller (handheld) as player 0's. Only the
+  first time per boot: when a controller is lost while playing, the game still asks. Checked on both games: no
+  controller screen, the title takes A and the world the stick; with the option off the screen is there as before.
 - **Fixes the ghosting on the player's left eye with FSR 3.1, TAA and frame generation**: per-object motion vectors pair
   a draw with its previous frame's by a key over its arguments, and that key read one word past them - two of the
   call's float registers, leftovers that alternated from frame to frame for the eye. It never found its previous
