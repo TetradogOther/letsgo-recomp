@@ -50,9 +50,9 @@
   some pipelines were made again every frame. 64 now.
 - **F12 menu reorganised**:
   - **Anti-aliasing**: Off / SMAA / TAA / FSR 3.1. FSR 3.1 is the last choice instead of an upscaler of its own (with
-    its mode below it); with any other choice a lower render resolution is scaled bilinearly (FSR 1 is gone from the
-    menu; it stays as the fallback when FSR 3.1's DLL is missing). `larecomp.ini`: `aa = fsr3`; an older
-    `upscaler = fsr3` reads as it.
+    its mode below it); with any other choice the upscaler of a lower render resolution is picked below it: FSR 1
+    (the default, as before) or bilinear. FSR 1 is also the fallback when FSR 3.1's DLL is missing. `larecomp.ini`:
+    `aa = fsr3`; an older `upscaler = fsr3` reads as it.
   - **Frame generation**: Off / 2x, with FSR 3.1 anti-aliasing, switched live (AMD's swapchain is made or dropped at the
     next frame; its queues are now created with the device whenever the DLL is there). FSR 3.1 generates one frame
     between two (several is FSR 4's, DirectX 12 only). `frame_gen = 2`.
