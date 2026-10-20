@@ -543,9 +543,7 @@ extern "C" void launcher_lg_run(const char *root) {
             ImGui::PopStyleVar();
             ImGui::PopFont();
             ImGui::EndGroup();
-            const char *name = ready ? game_name("extracted/exefs") : NULL;
-            if (name) ImGui::TextDisabled("%s · v" RT_APP_VERSION, name);
-            else ImGui::TextDisabled("v" RT_APP_VERSION);
+            ImGui::TextDisabled("v" RT_APP_VERSION);
             ImGui::Dummy(ImVec2(0, 14 * s));
             ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
             for (int t = 0; t < NTABS; t++) {
@@ -580,15 +578,18 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
                           ImGuiWindowFlags_NoScrollbar);
         {
-            float bsz = 40 * s;
             ImGui::PushFont(fonts.title);
             ImGui::TextColored(UI_GOLD, "%s", names[tab]);
             ImGui::PopFont();
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - bsz * 2 - ImGui::GetStyle().ItemSpacing.x * 0.5f);
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() - pad * 0.5f);
-            if (window_button("##min", false, bsz)) SDL_MinimizeWindow(win);
-            ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.5f);
-            if (window_button("##close", true, bsz)) exit(0);
+            {   // the window's buttons in its top right corner, side by side on one line (placed, not flowed after the title)
+                ImVec2 back = ImGui::GetCursorScreenPos(), wp = ImGui::GetWindowPos();
+                float bsz = 40 * s, gap = 6 * s, x = wp.x + ImGui::GetWindowWidth() - pad - bsz * 2 - gap, y = wp.y + pad * 0.6f;
+                ImGui::SetCursorScreenPos(ImVec2(x, y));
+                if (window_button("##min", false, bsz)) SDL_MinimizeWindow(win);
+                ImGui::SetCursorScreenPos(ImVec2(x + bsz + gap, y));
+                if (window_button("##close", true, bsz)) exit(0);
+                ImGui::SetCursorScreenPos(back);
+            }
             ImGui::Separator();
             ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
             if (tab == TAB_GAME) {
