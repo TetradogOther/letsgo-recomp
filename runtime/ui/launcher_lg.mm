@@ -248,27 +248,78 @@ static const char *lang_name(const char *code) {
     return code;
 }
 
-static void mods_section(SDL_Window *win, char (*mods)[128], int nmods, int *mod, int inst) {
+// The mods in their order (the active ones first, as larecomp.ini lists them: "<name>|<name>..."), and which are on
+static char g_mods[MODS_MAX][128];
+static bool g_mod_on[MODS_MAX];
+static int g_nmods;
+// Reads mods/ again: the names in `active` ('|' between them) on and first, in that order; the rest after, off
+static void mods_reload(const char *active) {
+    char found[MODS_MAX][128];
+    int n = mods_list(found, MODS_MAX);
+    bool used[MODS_MAX] = {};
+    g_nmods = 0;
+    char list[sizeof g_settings.mod];
+    snprintf(list, sizeof list, "%s", active);
+    for (char *save = NULL, *name = strtok_r(list, "|", &save); name; name = strtok_r(NULL, "|", &save))
+        for (int i = 0; i < n; i++)
+            if (!used[i] && !strcmp(found[i], name)) {
+                used[i] = true;
+                snprintf(g_mods[g_nmods], sizeof g_mods[0], "%s", found[i]);
+                g_mod_on[g_nmods++] = true;
+            }
+    for (int i = 0; i < n; i++)
+        if (!used[i]) snprintf(g_mods[g_nmods], sizeof g_mods[0], "%s", found[i]), g_mod_on[g_nmods++] = false;
+}
+// The active ones, in order, as larecomp.ini keeps them
+static void mods_active(char *out, size_t cap) {
+    out[0] = 0;
+    for (int i = 0; i < g_nmods; i++)
+        if (g_mod_on[i]) {
+            if (out[0]) strncat(out, "|", cap - strlen(out) - 1);
+            strncat(out, g_mods[i], cap - strlen(out) - 1);
+        }
+}
+
+static void mods_section(SDL_Window *win, int inst) {
     static const SDL_DialogFileFilter filters[] = {{"Mod (.zip, .rar, .7z)", "zip;rar;7z"}};
     ImGui::PushTextWrapPos(0);
     ImGui::TextUnformatted(T("Mods that replace the game's files (a romfs folder, as Atmosphere's LayeredFS): translations, textures, models. "
-                             "One at a time. Mods of the game's code (exefs, IPS patches, cheats) don't work in this port.",
+                             "Mods of the game's code (exefs, IPS patches, cheats) don't work in this port.",
                              "Mods que trocam arquivos do jogo (uma pasta romfs, como o LayeredFS do Atmosphere): traduções, texturas, modelos. "
-                             "Um por vez. Mods do código do jogo (exefs, patches IPS, cheats) não funcionam neste port."));
+                             "Mods do código do jogo (exefs, patches IPS, cheats) não funcionam neste port."));
     ImGui::PopTextWrapPos();
-    ui_heading(T("Active mod", "Mod ativo"));
-    if (ImGui::RadioButton(T("None (the game as it is)", "Nenhum (o jogo original)"), *mod == 0)) *mod = 0;
-    for (int i = 0; i < nmods; i++) {
+    ui_heading(T("Mods", "Mods"));
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%s", T("Tick the ones to use (several at once). Where two change the same file, the higher one wins: the arrows move it.",
+                                "Marque os que vão ser usados (vários ao mesmo tempo). Se dois trocam o mesmo arquivo, vale o de cima: as setas mudam a ordem."));
+    ImGui::PopTextWrapPos();
+    int move = -1, dir = 0;
+    for (int i = 0; i < g_nmods; i++) {
         ImGui::PushID(i);
-        if (ImGui::RadioButton(mods[i], *mod == i + 1)) *mod = i + 1;
-        const char *lang = mod_language(mods[i]);
+        ImGui::BeginDisabled(i == 0);
+        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) move = i, dir = -1;
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.4f);
+        ImGui::BeginDisabled(i == g_nmods - 1);
+        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) move = i, dir = 1;
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox(g_mods[i], &g_mod_on[i]);
+        const char *lang = mod_language(g_mods[i]);
         if (lang) {
             ImGui::SameLine();
             ImGui::TextDisabled(g_pt ? "(troca os textos em %s)" : "(replaces the %s texts)", lang_name(lang));
         }
         ImGui::PopID();
     }
-    if (!nmods) ImGui::TextDisabled("%s", T("No mods in the mods folder yet.", "Nenhum mod na pasta mods ainda."));
+    if (move >= 0) {  // (swapped with the one above / below it)
+        int j = move + dir;
+        char name[128];
+        bool on = g_mod_on[move];
+        memcpy(name, g_mods[move], sizeof name), memcpy(g_mods[move], g_mods[j], sizeof name), memcpy(g_mods[j], name, sizeof name);
+        g_mod_on[move] = g_mod_on[j], g_mod_on[j] = on;
+    }
+    if (!g_nmods) ImGui::TextDisabled("%s", T("No mods in the mods folder yet: the game as it is.", "Nenhum mod na pasta mods ainda: o jogo original."));
     ImGui::Spacing();
     if (inst == MOD_INSTALL_RUNNING) ImGui::TextDisabled("%s", T("Installing the mod...", "Instalando o mod..."));
     else if (ImGui::Button(T("Install a mod...", "Instalar mod..."))) SDL_ShowOpenFileDialog(picked_mod, NULL, win, filters, 1, NULL, false);
@@ -314,10 +365,7 @@ extern "C" void launcher_lg_run(const char *root) {
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
     bool ui2x_on = g_settings.ui2x;  // (the interface at 2x: runtime/ui2x.c)
     bool full = g_settings.fullscreen, wildb = g_settings.wild_battle, skipc = g_settings.skip_controller;
-    // Mods: the folders under mods/ (runtime/mods.h); 0 = none (the game as it is)
-    static char mods[MODS_MAX][128];
-    int nmods = mods_list(mods, MODS_MAX), mod = 0;
-    for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], g_settings.mod)) mod = i + 1;
+    mods_reload(g_settings.mod);  // (the folders under mods/: runtime/mods.h)
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     bool autoplay = getenv("LARECOMP_LAUNCHER_AUTOPLAY") != NULL, play = false;
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
@@ -327,7 +375,7 @@ extern "C" void launcher_lg_run(const char *root) {
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
-    static const float bg[4] = {0.04f, 0.06f, 0.05f, 1};
+    static const float bg[4] = {0.06f, 0.09f, 0.08f, 1};  // (the F12 menu's panel colour)
 
     while (!play) {
         menu_apply_window_requests(win);
@@ -345,11 +393,11 @@ extern "C" void launcher_lg_run(const char *root) {
         static int last_install;
         int inst = mod_install_state();
         if ((inst != last_install && inst == MOD_INSTALL_DONE) || focus_back) {  // a new mod (installed, or copied by hand)
-            char was[128];
-            snprintf(was, sizeof was, "%s", mod ? mods[mod - 1] : "");
-            nmods = mods_list(mods, MODS_MAX), mod = 0;
-            const char *want = inst != last_install && inst == MOD_INSTALL_DONE ? mod_install_name() : was;
-            for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], want)) mod = i + 1;
+            char was[sizeof g_settings.mod], want[sizeof g_settings.mod + 130];
+            mods_active(was, sizeof was);
+            if (inst != last_install && inst == MOD_INSTALL_DONE) snprintf(want, sizeof want, "%s%s%s", mod_install_name(), was[0] ? "|" : "", was);
+            else snprintf(want, sizeof want, "%s", was);  // (a new one installed: on, and first)
+            mods_reload(want);
         }
         last_install = inst;
         bool ready = !setup_running() && setup_ready();
@@ -372,12 +420,22 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui_ImplSDL3_NewFrame();
         g_scale = ui_scale(scaler, io.DisplaySize.y);
         ImGui::NewFrame();
-        // one window of a fixed size: the tabs change what is inside it, Play stays at the bottom
-        float ww = fminf(io.DisplaySize.x * 0.94f, 1150 * g_scale), wh = fminf(io.DisplaySize.y * 0.94f, 1000 * g_scale);
-        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
+        // the whole window (not a panel inside it): the tabs change what is in it, Play stays at the bottom; the content
+        // in a column of up to 1150 px (at 1080) in the middle of a wide window
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(bg[0], bg[1], bg[2], 1));
         ImGui::Begin("##launcher", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+                                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
+                                             ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        {
+            float avail = ImGui::GetContentRegionAvail().x, colw = fminf(avail, 1150 * g_scale);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - colw) * 0.5f);
+            ImGui::BeginChild("##column", ImVec2(colw, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoScrollbar);
+        }
         ui_title(fonts.title, RT_APP_NAME);
         ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("v" RT_APP_VERSION).x);
         ImGui::AlignTextToFramePadding();
@@ -421,7 +479,7 @@ extern "C" void launcher_lg_run(const char *root) {
                 } else if (t == TAB_CONTROLS) {
                     keys_section();
                 } else {
-                    mods_section(win, mods, nmods, &mod, inst);
+                    mods_section(win, inst);
                 }
                 ImGui::EndChild();
                 ImGui::EndTabItem();
@@ -435,6 +493,7 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::EndDisabled();
         if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", T("Set up the game files first (Game tab).", "Configure os arquivos do jogo antes (aba Jogo)."));
+        ImGui::EndChild();
         ImGui::End();
 
         ImGui::Render();
@@ -450,7 +509,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_settings.wild_battle = wildb;
     g_settings.skip_controller = skipc;
     g_settings.ui2x = ui2x_on;
-    snprintf(g_settings.mod, sizeof g_settings.mod, "%s", mod ? mods[mod - 1] : "");
+    mods_active(g_settings.mod, sizeof g_settings.mod);
     settings_save();
     vk_imgui_backend_shutdown();
     ImGui_ImplSDL3_Shutdown();

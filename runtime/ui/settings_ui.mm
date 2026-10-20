@@ -193,16 +193,25 @@ void ui_page_graphics(float x, bool known) {
     ui_row(l[3], x);
     ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, sh, 3);
     ImGui::Separator();
-    // anti-aliasing: SMAA on the final image (the interface too), TAA on the scene (jittered, motion vectors:
-    // runtime/nvn/vulkan/exec.c taa_run), or FSR 3.1 - temporal (jittered scene, motion vectors, the interface masked:
-    // exec.c, fsr3.cpp), it anti-aliases and upscales a lower render resolution (its mode, below). Otherwise the upscaler
-    // picked below: FSR 1 or bilinear. The upscaler row offers FSR 3.1 too: the same choice, the two rows follow each
-    // other; leaving FSR 3.1 there brings back the anti-aliasing it replaced.
+    // anti-aliasing: SMAA on the final image (the interface too) or TAA on the scene (jittered, motion vectors:
+    // runtime/nvn/vulkan/exec.c taa_run). FSR 3.1 is picked as the upscaler (one place): temporal (jittered scene,
+    // motion vectors, the interface masked: exec.c, fsr3.cpp), it anti-aliases too - settings.h keeps it as AA_FSR3 -
+    // so the anti-aliasing row only says so then; leaving FSR 3.1 brings back the anti-aliasing it replaced.
     static int last_aa = AA_SMAA;
     if (g_settings.antialias != AA_FSR3) last_aa = g_settings.antialias;
-    const char *aa[] = {UI_T("Off", "Desligado", "Выкл."), "SMAA", "TAA", "FSR 3.1"};
     ui_row(l[4], x);
-    if (ImGui::Combo("##aa", &g_settings.antialias, aa, 4)) settings_apply_levels();
+    if (g_settings.antialias == AA_FSR3) {
+        ImGui::BeginDisabled();
+        if (ImGui::BeginCombo("##aa", UI_T("Included in FSR 3.1", "Incluído no FSR 3.1", "Входит в FSR 3.1"))) ImGui::EndCombo();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", UI_T("FSR 3.1 anti-aliases on its own. Pick another upscaler to choose SMAA or TAA.",
+                                         "O FSR 3.1 já faz o antisserrilhado. Escolha outro escalonador para usar SMAA ou TAA.",
+                                         "FSR 3.1 сам сглаживает. Выберите другое масштабирование для SMAA или TAA."));
+    } else {
+        const char *aa[] = {UI_T("Off", "Desligado", "Выкл."), "SMAA", "TAA"};
+        if (ImGui::Combo("##aa", &g_settings.antialias, aa, 3)) settings_apply_levels();
+    }
     {
         const char *up[] = {UI_T("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
         int u = g_settings.antialias == AA_FSR3 ? 2 : g_settings.upscaler_pick == UPSCALE_BILINEAR ? 0 : 1;

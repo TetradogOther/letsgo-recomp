@@ -382,12 +382,13 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::Begin("##quit", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                      ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::PushFont(g_menu_font);  // (Baloo 2; Segoe UI for Russian: ui_load_fonts)
-    ImGui::TextUnformatted(M("Close the game?", "Deseja fechar o jogo?", "Закрыть игру?"));
-    ImGui::TextDisabled("%s", M("Progress since the last save will be lost.", "O progresso desde o último save será perdido.",
-                                "Прогресс после последнего сохранения будет потерян."));
+    ui_title(g_menu_font, M("Close the game?", "Deseja fechar o jogo?", "Закрыть игру?"));
+    const char *lost = M("Progress since the last save will be lost.", "O progresso desde o último save será perdido.",
+                         "Прогресс после последнего сохранения будет потерян.");
+    ImGui::TextDisabled("%s", lost);
     ImGui::Spacing();
-    float bw = 220 * scale;
+    // the two answers side by side, Settings under them: together as wide as the text (at least 2 x 240 px)
+    float sp = ImGui::GetStyle().ItemSpacing.x, w = fmaxf(ImGui::CalcTextSize(lost).x, 480 * scale + sp), bw = (w - sp) / 2;
     static bool focus_no;
     if (!focus_no) { ImGui::SetKeyboardFocusHere(1); focus_no = true; }
     if (ImGui::Button(M("Yes", "Sim", "Да"), ImVec2(bw, 0))) {
@@ -398,14 +399,13 @@ static void quit_draw(ImGuiIO &io, float scale) {
     }
     ImGui::SameLine();
     bool no = ImGui::Button(M("No", "Não", "Нет"), ImVec2(bw, 0));
-    if (ImGui::Button(M("Settings (F12)", "Configurações (F12)", "Настройки (F12)"), ImVec2(bw * 2 + ImGui::GetStyle().ItemSpacing.x, 0))) {
+    if (ImGui::Button(M("Settings (F12)", "Configurações (F12)", "Настройки (F12)"), ImVec2(w, 0))) {
         focus_no = false;
         set_cfg(true);  // (closes the question: the way in from a controller)
     } else if (no || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         set_open(false);
         focus_no = false;
     }
-    ImGui::PopFont();
     ImGui::End();
 }
 

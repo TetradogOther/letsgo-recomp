@@ -168,14 +168,14 @@ set in the launcher (Controls tab).
 ## Translations and mods
 
 Mods that replace the game's files - Atmosphere LayeredFS packs: fan translations, textures, models - work as they
-are, one at a time, from the launcher's **Mods** tab. Mods of the game's code (exefs, IPS patches, cheats) can't
-apply to a recompiled game. The game has no Portuguese (or any other fan) translation of its own; fan translations
+are, several at once, from the launcher's **Mods** tab (where two replace the same file, the higher one in the list
+wins). Mods of the game's code (exefs, IPS patches, cheats) can't apply to a recompiled game. The game has no Portuguese (or any other fan) translation of its own; fan translations
 come this way:
 
 1. In the **Mods** tab, click **Install a mod...**.
 2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
    `romfs` folder for the game you set up (by its title id) inside it. Packs made for both games are fine.
-3. Choose it under **Active mod**. "None" goes back to the original game.
+3. Tick it in the list (a new one comes ticked and first). With none ticked, the game is as it is.
 4. A translation replaces the texts of one or more of the game's languages, so the game has to be in one of them.
    The Brazilian Portuguese pack replaces English and Spanish: pick English or Español on the game's language screen
    when starting a new game, or use a save made in one of those.
@@ -411,8 +411,8 @@ O jogo não tem português. A tradução de fãs do grupo **Pokémon Switch Bras
 2. No launcher, na aba **Mods**, clique em **Instalar mod...** e escolha o arquivo baixado. Não precisa descompactar: o
    programa abre o arquivo e acha sozinho a pasta do Let's Go Eevee (`0100187003A36000`), mesmo em pacotes que
    trazem os dois jogos.
-3. Em **Mod ativo**, escolha a tradução instalada e clique em **Jogar**. Para voltar ao inglês, escolha
-   "Nenhum (o jogo original)".
+3. Na lista de mods, deixe a tradução marcada (a recém-instalada já vem marcada e no topo) e clique em **Jogar**.
+   Para voltar ao inglês, desmarque-a.
 4. A tradução PT-BR substitui os textos em inglês e em espanhol. Num jogo novo, escolha **English** ou **Español** na
    tela de idioma do próprio jogo (ela avisa que não dá para trocar depois); um save que já está em um desses dois
    idiomas também aparece em português.

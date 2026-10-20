@@ -7,13 +7,15 @@ Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete),
 - **Start screen and F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the window)
   and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen has tabs - Game,
   Graphics, Image and sound, Controls, Mods - with Play always below them, and now has the graphics settings too; the
-  F12 menu has Graphics, Image and sound, Advanced. L / R on a controller change the tab.
+  F12 menu has Graphics, Image and sound, Advanced. L / R on a controller change the tab. The start screen fills its
+  window (the content in a column in the middle), and the "close the game?" question's buttons line up with its text.
 - **One frame rate setting**: the start screen's "60 fps" box is gone; the Graphics tab's frame rate limit (30 / 60 /
   120) is the same row as the F12 menu's.
 - **Translation is now Mods**: any mod that replaces the game's files (Atmosphere LayeredFS: translations, textures,
-  models) installs and is picked in the Mods tab, one at a time; **Open the mods folder** shows where to copy one by
+  models) installs and is ticked in the Mods tab, several at once: where two replace the same file, the higher one
+  in the list wins (arrows move them; a new one comes first). **Open the mods folder** shows where to copy one by
   hand, and the list follows when you come back. Mods of the game's code (exefs, IPS, cheats) can't apply to the
-  recompiled game, and the tab says so. `larecomp.ini` keeps `mod = <name>`.
+  recompiled game, and the tab says so. `larecomp.ini`: `mod = <name>|<name>...` (one name, as before, still works).
 - The walking fix at 60 / 120 fps hooks the movement and turning functions by the per-build address table (both
   games' addresses checked with tools/addrmap.py) instead of looking for their code near Pikachu's; the 60 fps
   research tools moved to `runtime/hle/fps60_research.c`.
@@ -26,8 +28,9 @@ Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete),
   also flickered because every few frames the scene's camera slot held a sky camera at the origin, and the depth was
   read with it: such a camera is now skipped, and a frame without the scene's camera keeps the previous one. Checked
   on Eevee and Pikachu.
-- **F12 menu: FSR 3.1 is in the upscaler row again** (Bilinear / FSR 1 / FSR 3.1), as well as in the anti-aliasing
-  row; the two follow each other.
+- **FSR 3.1 is in the upscaler row again** (Bilinear / FSR 1 / FSR 3.1), and only there: with it, the anti-aliasing
+  row says "Included in FSR 3.1" (it anti-aliases on its own); another upscaler brings back the anti-aliasing it
+  replaced.
 - **Skip controller selection** (launcher, `skip_controller = 1` in `larecomp.ini`; off by default; Eevee and Pikachu
   1.0.0): the game starts at the Game Freak logo with the controller already chosen, without "Press a button on the
   controller you want to use" and its confirmation - no button is pressed for it. The start sequence's controller

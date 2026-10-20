@@ -46,12 +46,13 @@ translations (mods\) and the log (lasrecomp.log). To move or back up the game, m
 Translations and mods
 ---------------------
 In the start screen's Mods tab, click "Install a mod..." and pick the file you downloaded (.zip, .rar or .7z, as it
-came; packs made for Atmosphere / LayeredFS work: translations, textures, models). Then choose it under "Active mod".
+came; packs made for Atmosphere / LayeredFS work: translations, textures, models). It comes ticked; several can be on
+at once (where two replace the same file, the higher one in the list wins).
 Mods of the game's code (exefs, IPS patches, cheats) don't work in this port.
 
 Portugues (Brasil): para jogar em portugues, baixe a traducao PT-BR de fas do grupo Pokemon Switch Brasil, abra a aba
-"Mods", clique em "Instalar mod..." e escolha o arquivo baixado (.rar ou .zip, do jeito que veio). Depois selecione-a
-em "Mod ativo".
+"Mods", clique em "Instalar mod..." e escolha o arquivo baixado (.rar ou .zip, do jeito que veio). Ela ja vem marcada
+na lista.
 A traducao substitui os textos em ingles e espanhol: num jogo novo, escolha English ou Espanol na tela de idioma do
 jogo. O programa abre em portugues quando o Windows esta em portugues.
 

@@ -111,7 +111,7 @@ jogo. Nada do jogo vai junto: o código é gerado no PC do jogador, a partir da 
 
 ## Opcional
 - **Tradução / mods:** no launcher, aba **Mods**, **Instalar mod...** e escolha o arquivo baixado (.zip, .rar, .7z);
-  depois escolha-o em "Mod ativo". Também dá para copiar o `romfs` do mod para `mods/<nome>/romfs` à mão (**Abrir a
+  ele já vem marcado na lista (dá para usar vários juntos; se dois trocam o mesmo arquivo, vale o de cima). Também dá para copiar o `romfs` do mod para `mods/<nome>/romfs` à mão (**Abrir a
   pasta de mods**).
 - **Fonte do sistema do Switch:** veja [fonts/README.md](../fonts/README.md).
 - **Melhor imagem:** com uma GPU folgada, escolha uma resolução acima da sua tela (por exemplo 4K numa tela 1080p):
