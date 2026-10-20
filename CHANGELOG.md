@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-19)
 
-Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16).
+A good part of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16): 120 fps,
+the walking fix at 60 / 120 fps, FSR 3.1 frame generation, the F12 menu's quality levels and skipping the controller
+screen.
 
 - **A launcher, and the F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the
   window) and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen is a launcher's
