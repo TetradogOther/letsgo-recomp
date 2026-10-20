@@ -24,6 +24,16 @@
   of the images one refresh apart; 30 fps at 4K full screen, 4x throughout, 86 % two refreshes apart; 60 fps at 4K full
   screen, where 4x needs ~16.8 ms of GPU a frame (a fixed 4x drops the world to 50 fps and the images go uneven), 2x.
   With a variable-refresh display, `LARECOMP_FG_VRR=1` drops the refresh grid (docs/DEPURACAO.md).
+- **Frame generation: no more shadows of bushes and trees where there are none** (walking right from Viridian's sign,
+  and elsewhere): an in-between image drew a shadow caster at another copy's place. The same mesh drawn twice in the
+  shadow map (x 1420 and 2670), the second coming into its view in frame N: the only candidate in N-1 was the first,
+  1250 units away, and the jump test for a draw paired by content (half the two values and 100 units) let it through.
+  A partner found by content that moved a word by more than a quarter of the two values and 50 units is now another copy:
+  the draw keeps frame N's constants. Found with the shadow map dumped per image (`LARECOMP_INTERP_RT_DUMP`) and research
+  switches to keep draws at N by target or identity (`LARECOMP_INTERP_KEEP_RT`, `_KEEP_SIG`). Measured on that walk
+  (30 fps x 4): flicker in the images where it showed 2.5 - 2.7 -> 1.5 % of the blocks, the walk 1.37 -> 1.34 % (max
+  2.7 -> 2.1); the walk in the grass 0.78 -> 0.73 %. Also: a value alternating between two states a frame at a time (back
+  to N-2's) keeps N instead of being blended.
 - **Frame generation: the interface is never blended** - with frame generation on, every 2D draw (no depth test: the
   interface, in the world and in menus) keeps frame N's constants in the in-between images, as the game draws it; the
   60 fps mode's menus without frame generation still slide theirs. The per-object cut check now counts 3D draws only:

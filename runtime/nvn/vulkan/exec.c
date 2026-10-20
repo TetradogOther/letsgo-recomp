@@ -965,6 +965,7 @@ static uint32_t pass_ncolor, pass_samples = 1, pass_w, pass_h;
 static int debug_pass_no;
 
 static void vk_end_pass_at(int line);
+static void debug_save_depth(TexBackend *b, const char *path);
 void vk_end_pass(void) { vk_end_pass_at(0); }
 #define vk_end_pass() vk_end_pass_at(__LINE__)
 static void vk_end_pass_at(int line) {
@@ -972,6 +973,28 @@ static void vk_end_pass_at(int line) {
     if (prof && line < 4096) prof_end_line[line]++;
     vkCmdEndRendering(vk_cmd());
     in_pass = false;
+    {   // LARECOMP_INTERP_RT_DUMP=<present>:<width> (research): each pass into a colour target of that width (the game's
+        // size) at that present, the real frame's and its in-between images' -> build/frames/rt_<present>_<image>_<n>.png
+        static long at = -2, wd;
+        if (at == -2) {
+            const char *e = getenv("LARECOMP_INTERP_RT_DUMP");
+            at = e ? atol(e) : -1, wd = e && strchr(e, ':') ? atol(strchr(e, ':') + 1) : 0;
+        }
+        static int nth;
+        if (at >= 0 && (long)renderer_present_count() == at && st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->backend &&
+            (long)st.rt.color[0]->width == wd) {
+            char path[512];
+            snprintf(path, sizeof path, "build/frames/rt_%ld_%llu_%d.png", at, (unsigned long long)fx_frame(), nth);
+            renderer_save_texture_tex(st.rt.color[0]->backend, path);
+            if (st.rt.depth && st.rt.depth->backend) {  // (its depth too, as a PGM stretched over its range: build/frames or _DIR)
+                const char *dir = getenv("LARECOMP_INTERP_RT_DUMP_DIR");
+                snprintf(path, sizeof path, "%s/rt_%ld_%llu_%d_depth.pgm", dir ? dir : "build/frames", at, (unsigned long long)fx_frame(), nth);
+                debug_save_depth(st.rt.depth->backend, path);
+                LOG("[interp-rt] %s: depth format %d\n", path, (int)((TexBackend *)st.rt.depth->backend)->format);
+            }
+            nth++;
+        }
+    }
     if (g_debug_frame && st.rt.ncolor && st.rt.color[0] && st.rt.color[0]->backend) {
         char path[256];
         static uint64_t debug_pass_frame = ~0ull;
@@ -2050,7 +2073,8 @@ static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
 
 // (debug frames) a depth image's depth values as a greyscale PGM, stretched over its own min..max
 static void debug_save_depth(TexBackend *b, const char *path) {
-    if (!b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || b->format != VK_FORMAT_D32_SFLOAT_S8_UINT) return;
+    if (!b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ||
+        (b->format != VK_FORMAT_D32_SFLOAT_S8_UINT && b->format != VK_FORMAT_D32_SFLOAT)) return;
     uint64_t n = (uint64_t)b->width * b->height;
     VkSpan out = vk_readback(n * 4);
     VkCommandBuffer cb = vk_cmd();
@@ -2937,8 +2961,11 @@ static bool ip_jumps(float a, float b) {
 
 // Frame N-2, N-1 and N three presents in a row at the game's same rate (vk_interp_begin): the in-between images follow
 // the curve through the three (ip_cbuf, mv_replay_camera). LARECOMP_INTERP_CURVE=0 (comparison): straight from N-1 to N.
-static bool ip_curve_ok;
+static bool ip_curve_ok;  // (three frames in a row and the curve on)
+static bool ip_three_ok;  // (three frames in a row: N-2 known - ip_cbuf's alternating values)
 static uint64_t ip_stats_curved;  // (words blended along the curve)
+static uint64_t ip_stats_alt;     // (words alternating between two values: kept at N)
+static uint64_t ip_stats_other_copy;  // (draws whose closest partner by content was another copy: kept at N)
 // The quadratic through c (N-2, at -1), a (N-1, at 0) and b (N, at 1), at t
 static float ip_curve3(float c, float a, float b, float t) { return a + t * (b - c) * 0.5f + t * t * (b - 2.0f * a + c) * 0.5f; }
 // ... for a word that moved in both steps by a smooth change: its acceleration (b - 2a + c) at most a quarter of the two
@@ -3120,7 +3147,9 @@ static void draw_(CmdRec *r, bool indexed) {
             if (at == -2) { const char *e = getenv("LARECOMP_INTERP_SIG_LOG"); at = e ? atol(e) : -1; sz = e && strchr(e, ':') ? atol(strchr(e, ':') + 1) : 0; }
             ip_sig_dbg = at >= 0 && !ip_replaying && (long)renderer_present_count() >= at && (long)renderer_present_count() <= at + 1 ? sz : 0;
             static int farlog = -1;
-            if (farlog < 0) farlog = getenv("LARECOMP_INTERP_FAR_LOG") != NULL || getenv("LARECOMP_INTERP_KEPT_LOG") != NULL;
+            if (farlog < 0)
+                farlog = getenv("LARECOMP_INTERP_FAR_LOG") != NULL || getenv("LARECOMP_INTERP_KEPT_LOG") != NULL ||
+                         getenv("LARECOMP_INTERP_KEEP_SIG") != NULL;
             if (ip_sig_dbg || (farlog && ip_replaying)) {
                 ip_sig_txt_n = snprintf(ip_sig_txt, sizeof ip_sig_txt, "prog %p vbuf %#llx obj %#llx args", (void *)st.program,
                                         (unsigned long long)st.vbuf[0].addr, (unsigned long long)st.obj);
@@ -5236,6 +5265,22 @@ static float ip_draw_dist(const IpDraw *n, const IpDraw *c, float limit) {
     }
     return d;
 }
+// A partner found by content (not the draw's own identity) that is another copy of the object: a word moved by more than
+// a quarter of the two values and 50 units. Viridian, walking right: a mesh drawn twice (at x 1420 and 2670), the second
+// coming into the shadow map's view in N - the only candidate in N-1 was the first, 1250 units away (not a jump by
+// ip_jumps: half the two values and 100), and the in-between images drew it there: the shadow of a bush on the road
+// where there is none. Its own motion between two frames is far below that.
+static bool ip_draw_other_copy(const IpDraw *n, const IpDraw *c) {
+    const IpFrame *fn = &ipf[ipc], *fc = &ipf[IP_PREV];
+    for (uint32_t i = 0; i < n->count; i++) {
+        const IpEntry *en = &fn->e[n->first + i], *ec = &fc->e[c->first + i];
+        const float *a = (const float *)(fc->data + ec->off), *b = (const float *)(fn->data + en->off);
+        for (uint32_t w = 0; w < en->size / 4; w++)
+            if (a[w] != b[w] && isfinite(a[w]) && isfinite(b[w]) && fabsf(b[w] - a[w]) > 0.25f * (fabsf(a[w]) + fabsf(b[w])) + 50.0f)
+                return true;
+    }
+    return false;
+}
 static bool ip_draw_jumps(const IpDraw *n, const IpDraw *c) {
     const IpFrame *fn = &ipf[ipc], *fc = &ipf[IP_PREV];
     for (uint32_t i = 0; i < n->count; i++) {
@@ -5282,6 +5327,12 @@ static void ip_pair_draw(void) {
         }
     }
     if (best && best != o0 && ip_draw_jumps(n, best)) best = o0;  // (the closest jumps: the identity's own, if any)
+    static int other = -1;  // (LARECOMP_INTERP_OTHER_COPY=0: comparison, the check off)
+    if (other < 0) other = getenv("LARECOMP_INTERP_OTHER_COPY") ? atoi(getenv("LARECOMP_INTERP_OTHER_COPY")) : 1;
+    if (other && best && best != o0 && ip_draw_other_copy(n, best)) {  // (another copy of it: none - frame N's constants, ip_cbuf)
+        if (!o0) { ip_part_set = true, ip_part_sig = 0, ip_part_occ = ~0u; ip_stats_other_copy++; return; }
+        best = o0;
+    }
     if (!best) return;
     if (best != o0) ip_stats_content++;
     ip_part_set = true, ip_part_sig = best->sig, ip_part_occ = best->occ;
@@ -5420,6 +5471,28 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
         static uint64_t keep_obj = 1;
         if (keep_obj == 1) keep_obj = getenv("LARECOMP_INTERP_KEEP_OBJ") ? strtoull(getenv("LARECOMP_INTERP_KEEP_OBJ"), NULL, 16) : 0;
         if (keep_obj && st.obj == keep_obj) return nd;
+        // LARECOMP_INTERP_KEEP_RT=<width> (research): the draws into a target of that width (the game's size) keep N
+        static long keep_rt = -1;
+        if (keep_rt < 0) keep_rt = getenv("LARECOMP_INTERP_KEEP_RT") ? atol(getenv("LARECOMP_INTERP_KEEP_RT")) : 0;
+        if (keep_rt) {
+            NvnTexture *t0 = st.rt.ncolor && st.rt.color[0] ? st.rt.color[0] : st.rt.depth;
+            if (t0 && (long)t0->width == keep_rt) return nd;
+        }
+        // LARECOMP_INTERP_KEEP_SIG=<text>[|<text>...] (research): the draws whose identity (as LARECOMP_INTERP_SIG_LOG prints
+        // it: program, vertex buffer, object, arguments) has one of these texts keep frame N's constants
+        static const char *keep_sig = (const char *)1;
+        if (keep_sig == (const char *)1) keep_sig = getenv("LARECOMP_INTERP_KEEP_SIG");
+        for (const char *q = keep_sig; q && *q;) {
+            const char *e = strchr(q, '|');
+            size_t len = e ? (size_t)(e - q) : strlen(q);
+            char one[96];
+            if (len && len < sizeof one) {
+                memcpy(one, q, len), one[len] = 0;
+                if (strstr(ip_sig_txt, one)) return nd;
+            }
+            if (!e) break;
+            q = e + 1;
+        }
     }
     // (the object check is the 3D draws': an interface element fading or scaling changes by large steps; a 2D draw has
     // the strict jump test below instead)
@@ -5458,12 +5531,14 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     // The curve's third point: N-1's partner in N-2, as N-1's own replay paired them (ip_curve_ok: three frames in a row
     // at the same rate)
     const uint32_t *c3 = NULL;
-    if (ip_curve_ok && o->pkey_ok && o->chg_known) {
+    if (ip_three_ok && o->pkey_ok && o->chg_known) {
         const IpEntry *e2 = ip_find(&ipf[IP_PREV2], o->pkey);
         if (e2 && e2->size == o->size) c3 = (const uint32_t *)(ipf[IP_PREV2].data + e2->off);
     }
     static int held_off = -1;  // (LARECOMP_INTERP_NO_HELD=1: research, held values blended like the others)
     if (held_off < 0) held_off = getenv("LARECOMP_INTERP_NO_HELD") != NULL;
+    static int alt_off = -1;  // (LARECOMP_INTERP_NO_ALT=1: comparison, alternating values blended like the others)
+    if (alt_off < 0) alt_off = getenv("LARECOMP_INTERP_NO_ALT") != NULL;
     // A jump anywhere in the buffer (a bone, a matrix row) keeps all of it at N: blending the rest would pull part of a
     // skeleton or of a matrix halfway and leave the other part, which stretches the model.
     for (uint32_t i = 0; i < nw; i++) {
@@ -5503,6 +5578,18 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
             else if (ip_jumps(fa, fb)) jump++;
         }
         if (dg) { dg->words += m; dg->changed += changed; }
+        // A vec4 back to N-2's value (every changed word of it, bit for bit) alternates between two states a frame at a
+        // time, it doesn't move (Viridian: words of the ground's fragment cbuf 7, 0 and 108 every other frame) - a quarter
+        // or half of the way between the two is neither. It keeps N.
+        if (c3 && changed && !bad && !alt_off) {
+            bool alt = true;
+            for (uint32_t i = g; i < g + m && alt; i++) if (a[i] != b[i] && c3[i] != b[i]) alt = false;
+            if (alt) {
+                for (uint32_t i = g; i < g + m; i++) buf[i] = b[i];
+                ip_stats_alt += changed;
+                continue;
+            }
+        }
         // A vec4 that held still from N-2 to N-1 and changes now is a step between states, not motion: a sprite's frame
         // in an atlas (the Pokémon's icons in the team screen, the cursor), an expression or a blink (eyes) - blended,
         // the in-between images sampled half-way across the atlas, a mix of two frames or a neighbour's cell (flicker).
@@ -5848,8 +5935,9 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
         cur->real = renderer_present_count(), cur->period = fps60_period_ns();
         static int curve = -1;
         if (curve < 0) curve = getenv("LARECOMP_INTERP_CURVE") ? atoi(getenv("LARECOMP_INTERP_CURVE")) : 1;
-        ip_curve_ok = curve && prev2->valid && prev->valid && !prev2->overflow && prev->real == cur->real - 1 &&
+        ip_three_ok = prev2->valid && prev->valid && !prev2->overflow && prev->real == cur->real - 1 &&
                       prev2->real == cur->real - 2 && prev->period == cur->period && prev2->period == cur->period;
+        ip_curve_ok = curve && ip_three_ok;
     }
     bool ok = prev->valid && cur->valid && cur->nlists > 0 && !cur->overflow && !prev->overflow && b && b->image &&
               b->aspect == VK_IMAGE_ASPECT_COLOR_BIT && b->samples <= 1 && cur->destroyed == g_nvn_destroyed;
@@ -5990,14 +6078,15 @@ void vk_interp_replay(float t) {
     st.rt_dirty = true;
     ip_stats[3]++;
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept, %llu stepped, %llu curved, %llu draws paired by content (replays %llu)\n",
+        LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept, %llu stepped, %llu alternating, %llu curved, %llu draws paired by content (replays %llu)\n",
             (unsigned long long)vk_frame_counter(), (unsigned long long)ip_stats[0], (unsigned long long)ip_stats[1],
-            (unsigned long long)ip_stats[2], (unsigned long long)ip_stats_held, (unsigned long long)ip_stats_curved,
+            (unsigned long long)ip_stats[2], (unsigned long long)ip_stats_held, (unsigned long long)ip_stats_alt, (unsigned long long)ip_stats_curved,
             (unsigned long long)ip_stats_content, (unsigned long long)ip_stats[3]);
     if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu\n", (unsigned long long)ip_stats_tagged,
-            (unsigned long long)ip_stats_untagged, (unsigned long long)ip_stats_vtx);
+        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu\n",
+            (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged, (unsigned long long)ip_stats_vtx,
+            (unsigned long long)ip_stats_other_copy);
 }
 
 // After the present's images: the next frame records into the other slot, from the state this one ended with
