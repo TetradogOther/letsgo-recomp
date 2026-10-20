@@ -38,6 +38,7 @@ static const uint64_t k_pikachu_100[][2] = {
     {0x7000305ad0, 0x7000305aa0}, {0x70006237b0, 0x7000623750}, {0x7000641190, 0x7000641130},
     {0x7000663660, 0x7000663600}, {0x7000664cd0, 0x7000664c70},
     {0x70002462e0, 0x70002462b0}, {0x7000197e90, 0x7000197e60}, {0x7000198b20, 0x7000198af0},
+    {0x700021b720, 0x700021b6f0}, {0x700020b810, 0x700020b7e0},  // (fps60.c: the walking at 60 / 120 fps)
     {0x70000395f0, 0x70000395f0}, {0x7000039600, 0x7000039600}, {0x700004eb50, 0x700004eb50},  // (same place)
 };
 static int g_build = -1;  // GAME_BUILD_* (runtime/gamesetup.h); -1 before the first boot
