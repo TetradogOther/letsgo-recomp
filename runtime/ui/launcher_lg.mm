@@ -530,19 +530,19 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::BeginChild("##side", ImVec2(side_w, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
                           ImGuiWindowFlags_NoScrollbar);
         {
-            float icon_sz = 72 * s;
-            if (icon) ImGui::Image(icon, ImVec2(icon_sz, icon_sz));
-            else ImGui::Dummy(ImVec2(icon_sz, icon_sz));
-            ImGui::SameLine();
-            ImGui::BeginGroup();
-            ImGui::Dummy(ImVec2(0, 4 * s));
-            ImGui::PushFont(fonts.title);
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0));
-            ImGui::TextColored(UI_GOLD, "Let's Go");
-            ImGui::TextColored(UI_GOLD, "Recomp");
-            ImGui::PopStyleVar();
-            ImGui::PopFont();
-            ImGui::EndGroup();
+            {   // the icon and the name in two lines beside it, both centred on one height (Baloo's lines are tall:
+                // the two are drawn closer than its line height)
+                ImGui::PushFont(fonts.title);
+                float fs = ImGui::GetFontSize(), step = fs * 0.78f, block = fs * 1.75f;
+                ImVec2 p = ImGui::GetCursorScreenPos();
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                if (icon) dl->AddImage(icon, p, ImVec2(p.x + block, p.y + block));
+                float tx = p.x + block + 12 * s, ty = p.y + (block - step - fs) * 0.5f;
+                dl->AddText(ImGui::GetFont(), fs, ImVec2(tx, ty), ImGui::GetColorU32(UI_GOLD), "Let's Go");
+                dl->AddText(ImGui::GetFont(), fs, ImVec2(tx, ty + step), ImGui::GetColorU32(UI_GOLD), "Recomp");
+                ImGui::PopFont();
+                ImGui::Dummy(ImVec2(side_w - pad * 2, block));
+            }
             ImGui::TextDisabled("v" RT_APP_VERSION);
             ImGui::Dummy(ImVec2(0, 14 * s));
             ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
