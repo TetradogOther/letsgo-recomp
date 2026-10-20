@@ -10,6 +10,10 @@ for the Switch (system services, NVN graphics on Vulkan, audio, controllers). **
 > extracted (the `exefs` and `romfs` folders). A fan project, not affiliated with Nintendo, The Pokémon Company, Game
 > Freak or Creatures.
 
+> [!NOTE]
+> **Work in progress.** The game hasn't been played from start to finish on this port yet. Bug reports, fixes and
+> improvements are very welcome: open an issue or a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ![Original settings vs. Let's Go Recomp 0.5.0 in Pewter City Gym](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-gym.jpg)
 
 ![Original settings vs. Let's Go Recomp 0.5.0 on a route](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-route.jpg)
