@@ -43,6 +43,7 @@ typedef struct {
     bool mv_debug;        // (not saved) the scene shows its camera motion vectors (runtime/nvn/vulkan/exec.c scene_hook)
     bool mv_objects;      // per-object motion vectors (characters' own motion) when motion vectors are in use (default on)
     float taa_sharpness;  // TAA: RCAS sharpening at the present, 0..1 (default 0.5)
+    float fsr3_sharpness; // FSR 3.1: its RCAS sharpening (AMD's robust CAS), 0..1 (default 0.5; graphics page, under its mode)
     int fsr3_preset;      // FSR3_*: with the FSR 3.1 upscaler, the render resolution (default FSR3_QUALITY)
     int frame_gen;        // frame generation: 0 off, 2 / 3 / 4 images per world frame (exec.c frame interpolation, any GPU)
     bool blur_quality;    // the game's downsample / blur / depth-of-field composite read better (runtime/nvn/vulkan/exec.c fx_patch_fs)

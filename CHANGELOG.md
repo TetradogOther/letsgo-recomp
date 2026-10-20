@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **FSR 3.1 sharpening slider** under the FSR 3.1 mode (graphics page, start screen and F12): its RCAS, AMD's robust
+  contrast-adaptive sharpening, 0-100 %, 50 % by default (`fsr3_sharpness` in `larecomp.ini`); the frame generation's
+  in-between images follow it. It was the TAA sharpness slider's value; that slider (Image and sound) is now TAA's
+  alone. Measured: image detail 6.4 at 0 %, 12.3 at 100 %.
+- **SSAO: fewer thin lines along the seams of the ground at 4K** (Viridian's dirt road, the path patches): since the
+  occlusion takes the whole scene pass, the patches drawn over the terrain are in its depth, and their seams have
+  cracks and slivers one or two pixels wide; at 4K (a pixel ~0.5 units of ground) such a pixel's normal came out
+  nearly level and the ground around it occluded it. A pixel whose two neighbours of a direction (one or two away)
+  are both nearer or both farther now takes their surface. Measured on the road: the darkest line 28 -> 9 levels;
+  the scene's occlusion otherwise the same (mean 5.28 / 5.28). Left: short lines where a patch has a real sloped edge
+  10-50 units high (geometry; a larger bias would cost 40 % of the real occlusion).
 - **Frame generation in full screen at 4K: even, and no images lost**. Measured at the screen (`LARECOMP_PRESENT_LOG`,
   4K full screen, 240 Hz, 60 fps x 2, FSR 3.1 native, SSAO, GI high): before, 1 image in 6 reached the screen in the
   same refresh as the one before it (one of the two lost) and others came in pairs 15 / 0 ms apart; now none is lost

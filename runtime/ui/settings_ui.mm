@@ -138,7 +138,7 @@ void ui_tab_select(int index) { g_tab_want = index; }
 
 // ------------------------------------------------------------------ the graphics page
 static const char *const *graphics_labels(int *n) {
-    static const char *l[8];
+    static const char *l[9];
     l[0] = UI_T("Frame rate limit", "Limite de quadros", "Лимит кадров");
     l[1] = UI_T("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)");
     l[2] = UI_T("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)");
@@ -147,7 +147,8 @@ static const char *const *graphics_labels(int *n) {
     l[5] = UI_T("Upscaler", "Escalonador", "Масштабирование");
     l[6] = UI_T("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1");
     l[7] = UI_T("Frame generation", "Geração de quadros", "Генерация кадров");
-    *n = 8;
+    l[8] = UI_T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)", "Резкость (AMD RCAS)");
+    *n = 9;
     return l;
 }
 
@@ -233,6 +234,15 @@ void ui_page_graphics(float x, bool known) {
                             UI_T("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
         ui_row(l[6], x);
         ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
+        // its sharpening: RCAS, AMD's robust contrast-adaptive sharpening (CAS) inside FSR 3.1 (exec.c post_process; the
+        // frame generation's in-between images take it too)
+        float pct = g_settings.fsr3_sharpness * 100;
+        ui_row(l[8], x);
+        if (ImGui::SliderFloat("##fsr3s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.fsr3_sharpness = pct / 100;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", UI_T("FSR 3.1's own sharpening (RCAS, AMD's contrast-adaptive sharpening). 0% turns it off.",
+                                         "A nitidez do próprio FSR 3.1 (RCAS, o realce adaptativo de contraste da AMD). 0% desliga.",
+                                         "Собственная резкость FSR 3.1 (RCAS, адаптивное повышение резкости AMD). 0% — выкл."));
     }
     // Frame generation (exec.c frame interpolation): 2, 3 or 4 images per world frame, the in-between ones drawn by
     // running the frame's draws again with their positions between the last frame's and this one's. Any GPU.
@@ -254,11 +264,11 @@ void ui_page_graphics(float x, bool known) {
 
 // ------------------------------------------------------------------ image and sound
 // Volume and the game image's colour, applied live in game (runtime/services/audio.c apply_gain,
-// runtime/nvn/vulkan/exec.c post_process, color.frag), and the TAA / FSR 3.1 sharpening at the present
+// runtime/nvn/vulkan/exec.c post_process, color.frag), and the TAA sharpening at the present
 void ui_page_image_sound(void) {
     const char *l_vol = UI_T("Volume", "Volume", "Громкость"), *l_bri = UI_T("Brightness", "Brilho", "Яркость"),
                *l_con = UI_T("Contrast", "Contraste", "Контраст"), *l_sat = UI_T("Saturation", "Saturação", "Насыщенность"),
-               *l_shp = UI_T("Sharpness (TAA / FSR 3.1)", "Nitidez (TAA / FSR 3.1)", "Резкость (TAA / FSR 3.1)");
+               *l_shp = UI_T("Sharpness (TAA)", "Nitidez (TAA)", "Резкость (TAA)");
     const char *labels[] = {l_vol, l_bri, l_con, l_sat, l_shp};
     float x = ui_label_x(labels, 5);
     struct Row { const char *label; float *v, lo, hi; } rows[] = {
@@ -272,7 +282,7 @@ void ui_page_image_sound(void) {
         if (ImGui::SliderFloat("##v", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *rows[i].v = pct / 100;
         ImGui::PopID();
     }
-    ImGui::BeginDisabled(g_settings.antialias != AA_TAA && g_settings.antialias != AA_FSR3);
+    ImGui::BeginDisabled(g_settings.antialias != AA_TAA);  // (FSR 3.1's: the graphics page, under its mode)
     {
         float pct = g_settings.taa_sharpness * 100;
         ui_row(l_shp, x);

@@ -4580,7 +4580,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
                           // the vectors are this uv - the previous one; FSR takes previous - this, in pixels
                           .mv_scale_x = -(float)b->width, .mv_scale_y = -(float)b->height,
                           .near_ = B / (A - 1), .far_ = B / (A + 1), .fov_y = 2.0f * atanf(1.0f / ao.proj[1]),
-                          .meters_per_unit = 0.01f, .frame_ms = 33.3f, .sharpness = g_settings.taa_sharpness,
+                          .meters_per_unit = 0.01f, .frame_ms = 33.3f, .sharpness = g_settings.fsr3_sharpness,
                           .reset = !ao.prev_ok};
         // an in-between image (frame interpolation): resolved against N's FSR 3.1 output instead - FSR's history goes on
         // with the real frames only (side_resolve.frag, post image 30)
@@ -4594,14 +4594,14 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
             v = post_view(so), rb_ = so;
             // ... and sharpened as FSR 3.1 sharpens the real frames (RCAS, the same strength: its stops 2 - 2 x sharpness),
             // or the in-between images were softer than the real ones and the detail pulsed at the frame rate
-            if (g_settings.taa_sharpness > 0.01f) {
+            if (g_settings.fsr3_sharpness > 0.01f) {
                 TexBackend *r = post_image(31, ow, oh);
                 // (0.6 stops weaker than FSR's: the Catmull-Rom history keeps detail of its own - at FSR's strength the
                 // in-between images were 4 - 10 % sharper than the real frames, at 0.7 weaker within 3 %; research:
                 // LARECOMP_SIDE_SHARP_STOPS)
                 static float extra = -1;
                 if (extra < 0) extra = getenv("LARECOMP_SIDE_SHARP_STOPS") ? (float)atof(getenv("LARECOMP_SIDE_SHARP_STOPS")) : 0.6f;
-                float pr[8] = {exp2f(-2.0f * (1.0f - g_settings.taa_sharpness) - extra), 0, 0, 0, (float)ow, (float)oh};
+                float pr[8] = {exp2f(-2.0f * (1.0f - g_settings.fsr3_sharpness) - extra), 0, 0, 0, (float)ow, (float)oh};
                 VkImageView ri_[3] = {v};
                 post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
                 v = post_view(r), rb_ = r;

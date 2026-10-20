@@ -448,6 +448,19 @@ static const char *builtin_src(const char *name, int *stage) {
             "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
             "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
             "  vec3 c = vpos(p), l = vpos(p - ivec2(1, 0)), r = vpos(p + ivec2(1, 0)), u = vpos(p - ivec2(0, 1)), d = vpos(p + ivec2(0, 1));\n"
+            // A pixel whose two neighbours of a direction are both nearer or both farther is no plane: a crack or a sliver one
+            // pixel wide (the seams between the ground's pieces and the path patches drawn ~2 units over it). At 4K a pixel
+            // covers ~0.5 units of ground, so its normal came out nearly level, the ground around it occluded it, and every
+            // seam was a thin dark line (at 720p hardly). The surface is the neighbours'.
+            "  float tc = 1e-4 * c.z;\n"
+            "  if ((l.z - c.z) * (r.z - c.z) > 0.0 && min(abs(l.z - c.z), abs(r.z - c.z)) > tc) c = (l + r) * 0.5;\n"
+            "  else if ((u.z - c.z) * (d.z - c.z) > 0.0 && min(abs(u.z - c.z), abs(d.z - c.z)) > tc) c = (u + d) * 0.5;\n"
+            // (two pixels wide: the same with the neighbours two away)
+            "  else {\n"
+            "    vec3 l2 = vpos(p - ivec2(2, 0)), r2 = vpos(p + ivec2(2, 0)), u2 = vpos(p - ivec2(0, 2)), d2 = vpos(p + ivec2(0, 2));\n"
+            "    if ((l2.z - c.z) * (r2.z - c.z) > 0.0 && min(abs(l2.z - c.z), abs(r2.z - c.z)) > tc) { c = (l2 + r2) * 0.5; l = l2; r = r2; }\n"
+            "    else if ((u2.z - c.z) * (d2.z - c.z) > 0.0 && min(abs(u2.z - c.z), abs(d2.z - c.z)) > tc) { c = (u2 + d2) * 0.5; u = u2; d = d2; }\n"
+            "  }\n"
             "  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;\n"
             "  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;\n"
             "  vec3 n = normalize(cross(dx, dy));\n"

@@ -33,6 +33,7 @@ Settings g_settings = {
     .blur_quality = true,
     .mv_objects = true,
     .taa_sharpness = 0.5f,
+    .fsr3_sharpness = 0.5f,
     .fsr3_preset = FSR3_QUALITY,
     .gi = false,
     .gi_intensity = 2.0f,
@@ -108,6 +109,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "aa"))
         g_settings.antialias = !strcmp(val, "fsr3") ? AA_FSR3 : !strcmp(val, "taa") ? AA_TAA : !strcmp(val, "smaa") ? AA_SMAA : AA_OFF;
     else if (!strcmp(key, "taa_sharpness")) g_settings.taa_sharpness = (float)atof(val);
+    else if (!strcmp(key, "fsr3_sharpness")) g_settings.fsr3_sharpness = (float)atof(val);
     else if (!strcmp(key, "fsr3_preset"))
         g_settings.fsr3_preset = !strcmp(val, "native") ? FSR3_NATIVE_AA : !strcmp(val, "balanced") ? FSR3_BALANCED :
                                  !strcmp(val, "performance") ? FSR3_PERFORMANCE : !strcmp(val, "ultra") ? FSR3_ULTRA_PERFORMANCE : FSR3_QUALITY;
@@ -132,6 +134,7 @@ void settings_clamp_color(void) {
     g_settings.saturation = clampf_(g_settings.saturation, 0.0f, 2.0f);
     if (g_settings.shadow_filter < SHADOW_GAME || g_settings.shadow_filter > SHADOW_SMOOTH) g_settings.shadow_filter = SHADOW_SMOOTH;
     g_settings.taa_sharpness = g_settings.taa_sharpness != g_settings.taa_sharpness ? 0.5f : clampf_(g_settings.taa_sharpness, 0.0f, 1.0f);
+    g_settings.fsr3_sharpness = g_settings.fsr3_sharpness != g_settings.fsr3_sharpness ? 0.5f : clampf_(g_settings.fsr3_sharpness, 0.0f, 1.0f);
     settings_apply_levels();
 }
 
@@ -206,6 +209,7 @@ void settings_save(void) {
                             g_settings.antialias == AA_SMAA ? "smaa" : "off");
     fprintf(f, "upscaler = %s\n", g_settings.upscaler_pick == UPSCALE_BILINEAR ? "bilinear" : "fsr1");  // (FSR 3.1: "aa")
     fprintf(f, "taa_sharpness = %.2f\n", g_settings.taa_sharpness);
+    fprintf(f, "fsr3_sharpness = %.2f\n", g_settings.fsr3_sharpness);
     static const char *const presets[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "fsr3_preset = %s\n", presets[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1]);
     fprintf(f, "frame_gen = %d\n", g_settings.frame_gen);
