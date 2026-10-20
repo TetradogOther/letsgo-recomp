@@ -24,7 +24,9 @@ typedef struct {
     int fps;  // 30 (the game's own), 60 or 120 (experimental): the world's rate (runtime/hle/fps60.c; F12 menu, live)
     int res_mode;        // RES_MATCH, 1..4 (N x the Switch's 1080p), RES_DYNAMIC, RES_Q75/50/25 (share of the display)
     int res_height;      // the launcher's render height in lines (720 / 1080 / 1440 / 2160); 0: res_mode decides
-    int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (from antialias: FSR 3.1 or bilinear)
+    int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (FSR 3.1 with its anti-aliasing,
+                         // else upscaler_pick: settings_apply_levels)
+    int upscaler_pick;   // UPSCALE_BILINEAR / UPSCALE_FSR1 (default): with any anti-aliasing but FSR 3.1 (F12 menu)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
     float brightness;    // colour of the game image (F12 menu, runtime/ui/menu.mm; post pass in runtime/nvn/vulkan/exec.c):
@@ -67,7 +69,7 @@ typedef struct {
     bool wild_battle;    // touching a wild Pokémon starts a battle, then the capture (runtime/hle/wildbattle.c)
     bool skip_controller;  // no controller screen at start: straight to the Game Freak logo (runtime/hle/controller_skip.c)
     char game_lang[8];   // the game's language code ("en-US", "es"...: runtime/mods.c game_language)
-    char mod[128];       // active mod / fan translation (mods/<name>/), empty = none (runtime/mods.h)
+    char mod[1024];      // the active mods (mods/<name>/), '|' between them, the first one's files win; empty = none (runtime/mods.h)
 } Settings;
 
 extern Settings g_settings;
@@ -75,4 +77,4 @@ extern Settings g_settings;
 void settings_load(void);
 void settings_save(void);
 void settings_clamp_color(void);  // brightness / contrast / saturation / SSAO into their ranges
-void settings_apply_levels(void);  // the SSAO / GI parameters from their levels, the upscaler from the anti-aliasing
+void settings_apply_levels(void);  // the SSAO / GI parameters from their levels, the upscaler from the anti-aliasing and pick

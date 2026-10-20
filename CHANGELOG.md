@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Frame generation interpolates the characters too**: the in-between images showed the player (and other walking
+  characters) almost where frame N had them, so they kept moving at the game's rate while the camera and the scenery
+  were smooth. Two checks meant to catch cuts and swapped models fired on ordinary motion:
+  - A word "jumped" when it changed by more than half its size plus 4 units, and then the whole buffer stayed at N. A
+    skeleton's translations near 0 (the player in the middle of the screen, where the camera's coordinates are small)
+    change sign every frame: a quarter of the player's skeleton jumped. Now 100 units (`LARECOMP_INTERP_JUMP_ABS`);
+    rotations never jumped and still don't.
+  - An object was not blended when more than 20 % of its changed words changed by a lot; a walking skeleton at 30 fps
+    has 20-25 %, so it was frozen at N one frame in two, and when nothing else moved the whole in-between image was
+    dropped (a 33 ms step several times a second at 2x). Now 40 % (swapped models and cuts: 50-95 %).
+  Walking at 30 fps x 2: the player's in-between image is halfway (difference to N-1 / N 7.8 / 7.9; before 10.8 /
+  3.2), 95 % of the moving 16 x 16 blocks of the image halfway, and no frame without its in-between image in 400
+  (before ~30); at the screen 603 of 622 intervals at 16.7 ms. Captures and the battle transition checked: no torn
+  models. `LARECOMP_INTERP_REJ_LOG` says which frames and objects are kept at N and why.
+- **Frame generation is evenly paced**: the images came in pairs, so 2x looked hardly smoother than without it. Each
+  present's first in-between image went out as soon as it was rendered and the real frame at half the period: 6.7 /
+  10 ms apart instead of 8.3 / 8.3. Worse, the render thread's timed wait (winpthreads) woke up to ~7 ms late, and the
+  scheduled image went out together with the next present: 15 / 2 ms. Now every image of a present is scheduled a
+  fixed lead after it (the replays' time on the GPU, learnt from whether each image was ready on time; ~4 ms), on a
+  timeline that follows the game's presents smoothly. The render thread waits in 1 ms slices of SDL's high-resolution
+  timer, and the kept images come in two sets, so a present's images can wait while the next one's are rendered.
+  Measured at the screen (`LARECOMP_PRESENT_LOG`, `VK_KHR_present_wait`, 240 Hz, 60 fps): 2x 708 of 718 intervals
+  at 8.3 ms (before: none), also when rendering at 4K with FSR 3.1, SSAO and GI. 4x: 2015 of 2520 at one refresh
+  (the others: two images in one refresh, one of them dropped). 3x is 180 images a second, which a 240 Hz screen
+  can't show evenly. `LARECOMP_VK_PRESENT=fifo` gives an even 4x (1418 of 1438) at ~58 fps of game.
 - **Frame generation on any GPU: Off / 2x / 3x / 4x** (F12 menu, `frame_gen = 0 / 2 / 3 / 4`; replaces FSR 3.1's,
   which needed FSR 3.1 anti-aliasing and had only 2x on Vulkan): k - 1 in-between images per frame, drawn by running
   the frame's draws again with their constants (camera, objects, bones) blended between the last frame's and this
@@ -34,6 +59,42 @@
     / 120), native 3x ~48 / ~145, Quality 3x 60 / 180, Quality 4x ~55 / ~220.
 - **FSR 3.1 frame generation and AMD's swapchain removed**: the swapchain is the driver's again, the device has no extra
   queues, and `ffx_swapchain` is gone (FSR 3.1 upscaling stays).
+
+## 0.5.0 (2026-10-19)
+
+A good part of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16): 120 fps,
+the walking fix at 60 / 120 fps, FSR 3.1 frame generation, the F12 menu's quality levels and skipping the controller
+screen.
+
+- **A launcher, and the F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the
+  window) and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen is a launcher's
+  window - no system frame (dragged by its top; its own minimize and close), taller than wide - with a sidebar: the
+  project's icon, the pages (Game, Graphics, Image and sound, Controls, Mods) and a big Play; it now has the graphics
+  settings too. Play gives the game its window back (frame, 1280 x 720, full screen when set). The F12 menu has tabs:
+  Graphics, Image and sound, Advanced. L / R on a controller change the page / tab. The "close the game?" question's
+  buttons line up with its text.
+- **One frame rate setting**: the start screen's "60 fps" box is gone; the Graphics page's frame rate limit (30 / 60 /
+  120) is the same row as the F12 menu's.
+- **Translation is now Mods**: any mod that replaces the game's files (Atmosphere LayeredFS: translations, textures,
+  models) installs and is ticked on the Mods page, several at once: where two replace the same file, the higher one
+  in the list wins (arrows move them; a new one comes first). **Open the mods folder** shows where to copy one by
+  hand, and the list follows when you come back. Mods of the game's code (exefs, IPS, cheats) can't apply to the
+  recompiled game, and the tab says so. `larecomp.ini`: `mod = <name>|<name>...` (one name, as before, still works).
+- The walking fix at 60 / 120 fps hooks the movement and turning functions by the per-build address table (both
+  games' addresses checked with tools/addrmap.py) instead of looking for their code near Pikachu's; the 60 fps
+  research tools moved to `runtime/hle/fps60_research.c`.
+
+- **Fixes SSAO and GI flickering as the camera moves** (rocks, bushes and characters going in and out of the effect):
+  they went onto the scene at its first blended draw after 16 opaque ones, and Let's Go draws blended ones among its
+  opaque ones - whatever came after got neither, and that line moved with the view (34 to 68 of about 130 opaque
+  draws walking in Pewter's gym). They now run when the 3D scene ends, with every opaque draw in (and before a fade
+  drawn over it, such as the title screen's from white). In battles they
+  also flickered because every few frames the scene's camera slot held a sky camera at the origin, and the depth was
+  read with it: such a camera is now skipped, and a frame without the scene's camera keeps the previous one. Checked
+  on Eevee and Pikachu.
+- **FSR 3.1 is in the upscaler row again** (Bilinear / FSR 1 / FSR 3.1), and only there: with it, the anti-aliasing
+  row says "Included in FSR 3.1" (it anti-aliases on its own); another upscaler brings back the anti-aliasing it
+  replaced.
 - **Skip controller selection** (launcher, `skip_controller = 1` in `larecomp.ini`; off by default; Eevee and Pikachu
   1.0.0): the game starts at the Game Freak logo with the controller already chosen, without "Press a button on the
   controller you want to use" and its confirmation - no button is pressed for it. The start sequence's controller
@@ -76,9 +137,12 @@
   pipelines were made again every frame. 64 now.
 - **F12 menu reorganised**:
   - **Anti-aliasing**: Off / SMAA / TAA / FSR 3.1. FSR 3.1 is the last choice instead of an upscaler of its own (with
-    its mode below it); with any other choice a lower render resolution is scaled bilinearly (FSR 1 is gone from the
-    menu; it stays as the fallback when FSR 3.1's DLL is missing). `larecomp.ini`: `aa = fsr3`; an older
-    `upscaler = fsr3` reads as it.
+    its mode below it); with any other choice the upscaler of a lower render resolution is picked below it: FSR 1
+    (the default, as before) or bilinear. FSR 1 is also the fallback when FSR 3.1's DLL is missing. `larecomp.ini`:
+    `aa = fsr3`; an older `upscaler = fsr3` reads as it.
+  - **Frame generation**: Off / 2x, with FSR 3.1 anti-aliasing, switched live (AMD's swapchain is made or dropped at the
+    next frame; its queues are now created with the device whenever the DLL is there). FSR 3.1 generates one frame
+    between two (several is FSR 4's, DirectX 12 only). `frame_gen = 2`.
   - **SSAO and GI**: quality levels Off (default) / Low / Medium / High instead of a box, and their parameters are gone
     from the advanced page (its debug views stay, under Debug). High is what they had before. SSAO: 16 / 12 / 8 samples
     (the shader takes the count now). GI: 4 rays x 8 steps at half the scene's size / 3 x 6 at half / 2 x 6 at a third.
@@ -89,6 +153,15 @@
   render size into the image its last pass grades into the presented one - and the 2x interface images and the
   high-resolution text read as the scene's (scaled) images. Now the copy is made of that image, and only a scaled render
   target counts as the scene's.
+
+## 0.4.2 (2026-10-19)
+
+- **Wild battles no longer crash when you switch to your partner** (#6), and the 0.4.1 fix is now exact. The crash
+  happens whenever the partner (the Pikachu or Eevee you started with) enters the battle while it is the one walking
+  with you (early in the game nobody else does): the battle brings in the field model of the Pokémon walking with you,
+  and the battle this mode uses has none for it. In that case touching a wild Pokémon now starts the game's own
+  catch, as without the mode. With another Pokémon walking with you, wild battles work, the partner included -
+  0.4.1 had sent some of those to the catch too.
 
 ## 0.4.1 (2026-10-19)
 

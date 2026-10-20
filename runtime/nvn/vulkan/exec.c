@@ -868,9 +868,9 @@ static uint32_t tex_wh[2][64][2];
 
 // ================================================================== SSAO hook (F12 menu)
 // The game's 3D scene is one pass into a 16:9 float target with depth (Let's Go: R11G11B10F + D32S8, 1080p scaled):
-// opaque draws first, then blended ones (foliage cards, effects), then bloom and the composite read it. The occlusion
-// goes onto that target once per frame, between the two: before the first blended draw, or when the pass ends if
-// there is none. The projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
+// opaque draws first, then blended ones (foliage cards, effects) - some of them among the opaque ones - then bloom and
+// the composite read it. The occlusion goes onto that target once per frame, when the pass ends (ssao_draw_hook). The
+// projection comes from the draws' constant buffers (Let's Go: the scene block, vertex cbuf 5).
 static struct {
     bool qual, busy;           // the pass running now is the scene's; ssao_run is recording
     NvnTexture *tex;           // the scene target of this frame's count of opaque draws
@@ -2903,10 +2903,22 @@ static void mv_set_camera(const double vp[16], const uint8_t *blk, uint32_t n, u
     ao.scene_size[ao.scene_cur] = n;
 }
 
+// A word that jumps between N-1 and N (a cut, a slot reused): no blend. More than half its size and 100 units: a
+// translation near 0 that changes sign is motion, not a jump - with 4 units the player's skeleton (in the middle of the
+// screen, where the camera's coordinates are small) jumped in a quarter of its words, was kept at N whole, and the
+// player moved at the game's rate in the in-between images (2x at 30: the image beside N, not halfway). Rotations (|v|
+// <= 1) never jump; cuts and swapped models are caught per object and per frame (vk_interp_begin).
+// LARECOMP_INTERP_JUMP_ABS=<units> (research).
+static float ip_jump_abs = -1;
+static bool ip_jumps(float a, float b) {
+    if (ip_jump_abs < 0) ip_jump_abs = getenv("LARECOMP_INTERP_JUMP_ABS") ? (float)atof(getenv("LARECOMP_INTERP_JUMP_ABS")) : 100.0f;
+    return fabsf(b - a) > 0.5f * (fabsf(a) + fabsf(b)) + ip_jump_abs;
+}
+
 // A blended word as the replay's (ip_cbuf): halfway (ip_t) between a and b unless it jumps (a cut: b)
 static float ip_lerp(float a, float b, bool *jump) {
     if (a == b) return b;
-    if (!isfinite(a) || !isfinite(b) || fabsf(b - a) > 0.5f * (fabsf(a) + fabsf(b)) + 4.0f) { *jump = true; return b; }
+    if (!isfinite(a) || !isfinite(b) || ip_jumps(a, b)) { *jump = true; return b; }
     return a + (b - a) * ip_t;
 }
 
@@ -2955,6 +2967,15 @@ static void mv_replay_camera(uint64_t fr) {
     mv_set_camera(vp, blk, nw->n, fr);
 }
 
+// A camera whose view (the 64 bytes before the projection) does not move the world: at the origin, as a sky's. Not the
+// scene's. (In battles, every few frames the scene draws' slot holds one - all of their draws that frame - and the
+// scene's camera is nowhere as a projection of its own: the occlusion and the indirect light read the depth with the
+// wrong camera in those frames and the right one in the others, and flickered. Seen at the end of a trainer battle.)
+static bool cam_at_origin(const float *p) {
+    const float *v = p - 16;
+    return fabsf(v[3]) < 1 && fabsf(v[7]) < 1 && fabsf(v[11]) < 1;
+}
+
 // The scene's projection, from the vertex constant buffers of its draws: where it was last found, else a scan (once
 // per frame). Let's Go: row-major, near 32, far 10000 (cm).
 static void ssao_find_projection(void) {
@@ -2968,7 +2989,10 @@ static void ssao_find_projection(void) {
             mv_replay_camera(fr);
             return;
         }
-        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), ao.proj)) {
+        float proj[4];
+        if (blk && ao.poff + 64 <= bsz && ssao_proj_at((const float *)(blk + ao.poff), proj) &&
+            !cam_at_origin((const float *)(blk + ao.poff))) {
+            memcpy(ao.proj, proj, sizeof ao.proj);
             ao.proj_frame = fr;
             mv_capture_camera((const float *)(blk + ao.poff), blk, bsz, fr);
             return;
@@ -2977,14 +3001,16 @@ static void ssao_find_projection(void) {
     if (ip_replaying) return;  // (no scan there)
     if (ao.scan_frame == fr) return;
     ao.scan_frame = fr;
+    float proj[4];
     for (int b = 0; b < 18; b++) {
         Range u = st.ubuf[0][b];
         if (!u.addr || u.size < 64) continue;
         uint64_t n = u.size > 4096 ? 4096 : u.size;
-        for (uint32_t o = 0; o + 64 <= n; o += 16)
-            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), ao.proj)) {
+        for (uint32_t o = 64; o + 64 <= n; o += 16)
+            if (ssao_proj_at((const float *)(uintptr_t)(u.addr + o), proj) && !cam_at_origin((const float *)(uintptr_t)(u.addr + o))) {
                 if (ao.pbind != b || ao.poff != o) LOG("[ssao] projection in vertex cbuf %d at %u: near %.3g far %.3g\n", b, o,
-                                                      ao.proj[3] / (ao.proj[2] - 1), ao.proj[3] / (ao.proj[2] + 1));
+                                                      proj[3] / (proj[2] - 1), proj[3] / (proj[2] + 1));
+                memcpy(ao.proj, proj, sizeof ao.proj);
                 ao.pbind = b, ao.poff = o, ao.proj_frame = fr;
                 mv_capture_camera((const float *)(uintptr_t)(u.addr + o), (const uint8_t *)(uintptr_t)u.addr, (uint32_t)u.size, fr);
                 return;
@@ -2992,15 +3018,26 @@ static void ssao_find_projection(void) {
     }
 }
 
-// Each draw in the scene pass: opaque ones are counted (and give the projection); the first blended one after enough
-// of them ends the pass, which runs the occlusion (vk_end_pass). True: the pass must begin again.
+// As the scene pass ends: no camera this frame (above) - the last one, if recent, standing still
+static void ssao_settle_camera(void) {
+    uint64_t fr = fx_frame();
+    if (ao.proj_frame == fr || !ao.vp_frame || ao.vp_frame >= fr || ao.vp_frame + 8 < fr) return;
+    ao.proj_frame = fr;
+    mv_set_camera(ao.vp, ao.scene[ao.scene_cur], ao.scene_size[ao.scene_cur], fr);
+}
+
+// Each draw in the scene pass: opaque ones are counted (and give the projection); the occlusion runs when the pass
+// ends (vk_end_pass), with all of them drawn. (It ran at the first blended draw after 16 opaque ones: Let's Go draws
+// blended ones among its opaque ones, and how many opaque draws came before the first changes with the view - 34 to 68
+// of about 130 walking in Pewter's gym - so the objects drawn after it went in and out of the occlusion and the
+// indirect light from one frame to the next: rocks and characters flickered as the camera moved.) A draw without the
+// depth test after them is no longer the 3D scene - a fade drawn over it (the title screen's from white), the game's
+// full-screen passes: the occlusion goes in before it (at the pass's end it went onto the fade too: grass showed
+// through the title's white). True: the pass must begin again.
 static bool ssao_draw_hook(void) {
     if (ao.busy || ao.done_frame == fx_frame()) return false;
-    if (!(st.color_state[0] & 1)) {
-        if (st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
-        return false;
-    }
-    if (ao.opaque < 16) return false;
+    if (!(st.color_state[0] & 1) && st.ds[0] && st.ds[1]) { ao.opaque++; ssao_find_projection(); }
+    if (st.ds[0] || ao.opaque < 16) return false;
     vk_end_pass();
     return true;
 }
@@ -4170,11 +4207,12 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
     }
 }
 
-// The scene hook (outside any pass: vk_end_pass, ssao_draw_hook), once per frame between the scene's opaque and blended
-// draws: camera motion vectors, then the occlusion - from the depth at its size -> blur across -> blur down ->
+// The scene hook (outside any pass: vk_end_pass), once per frame as the scene pass ends: camera motion vectors, the
+// indirect light, then the occlusion - from the depth at its size -> blur across -> blur down ->
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
     uint64_t fr = fx_frame();
+    ssao_settle_camera();
     ao.done_frame = fr;
     TexBackend *d = ao.depth;
     if (ao.proj_frame != fr || !d || !d->image || !(d->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || d->samples > 1) return;
@@ -4327,6 +4365,7 @@ static void taa_run(void) {
     float mo = nvn_depth_mode() == 0 ? 1.0f : 0.0f;
     // the motion vectors again: the blended draws after the scene hook have written their velocities since
     mv_nodump = true;
+    ssao_settle_camera();
     TexBackend *mv = ao.proj_frame == fr ? mv_run(cb, dv, d->width, d->height, mo, fr) : NULL;
     mv_nodump = false;
     cb = vk_cmd();
@@ -4872,9 +4911,9 @@ static IpDiag *ip_diag_for(int stage, int k, uint32_t size) {
     return &ip_diag[ip_ndiag++];
 }
 static void ip_diag_dump(void) {
-    LOG("[interp-diag] rejected frames: no-prev %llu overflow %llu destroyed %llu format %llu list-changed %llu; replayed %llu\n",
+    LOG("[interp-diag] rejected frames: no-prev %llu overflow %llu destroyed %llu format %llu list-changed %llu cut %llu; replayed %llu\n",
         (unsigned long long)ip_rej[0], (unsigned long long)ip_rej[1], (unsigned long long)ip_rej[2], (unsigned long long)ip_rej[3],
-        (unsigned long long)ip_rej[4], (unsigned long long)ip_stats[3]);
+        (unsigned long long)ip_rej[4], (unsigned long long)ip_rej[5], (unsigned long long)ip_stats[3]);
     for (int i = 0; i < ip_ndiag; i++) {
         const IpDiag *d = &ip_diag[i];
         LOG("[interp-diag] stage %d cbuf %d size %u: binds %llu (tagged %llu, no match %llu) words %llu changed %llu blended %llu jumps %llu nonfloat %llu\n",
@@ -4997,7 +5036,7 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
         memcpy(&fa, &a[i], 4);
         memcpy(&fb, &b[i], 4);
         bool jump = ip_draw_2d ? fabsf(fb - fa) > 0.3f * fmaxf(fabsf(fa), fabsf(fb)) && fabsf(fb - fa) > 0.02f  // (2D: a big move is a recycled row or glyph, not motion)
-                               : fabsf(fb - fa) > 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f;
+                               : ip_jumps(fa, fb);
         if (jump) {
             if (dg) dg->jumps += nw;
             ip_stats[1]++;
@@ -5019,7 +5058,7 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
             memcpy(&fa, &a[i], 4);
             memcpy(&fb, &b[i], 4);
             if (!fa_ok || !fb_ok) bad++;
-            else if (fabsf(fb - fa) > 0.5f * (fabsf(fa) + fabsf(fb)) + 4.0f) jump++;
+            else if (ip_jumps(fa, fb)) jump++;
         }
         if (dg) { dg->words += m; dg->changed += changed; }
         if (!bad && !jump) {
@@ -5072,14 +5111,15 @@ static void ip_note_list(uint64_t handle) {
 // The images of a present, kept until they are shown (device.c shows them on schedule, after the replays that wrote
 // the game's textures): the presented texture as it was (raw) and, when post_process does something to it (FSR 3,
 // SMAA, the colour pass), the result - made right away, while the scene's depth, motion vectors, jitter and interface
-// mask are this image's. Slots 0 .. 7: the in-between images; IP_KEEP_N: frame N's own.
+// mask are this image's. Slots 0 .. 7: the in-between images; IP_KEEP_N: frame N's own. Two sets, one per present
+// in turn: a present's images wait for their time (device.c) while the next present's are rendered.
 #define IP_KEEP_N 8
 typedef struct { TexBackend raw, post; bool post_ok; double ow, oh; } IpKeep;
-static IpKeep ip_keep[IP_KEEP_N + 1];
+static IpKeep ip_keep_sets[2][IP_KEEP_N + 1], *ip_keep = ip_keep_sets[0];
 static TexBackend *hold_copy_into(TexBackend *d, TexBackend *src);
 static VkImageView ip_post_view(TexBackend *b, double ow, double oh) {
-    for (int i = 0; i <= IP_KEEP_N; i++) {
-        IpKeep *k = &ip_keep[i];
+    for (int i = 0; i < 2 * (IP_KEEP_N + 1); i++) {
+        IpKeep *k = &ip_keep_sets[0][0] + i;
         if (b != &k->raw) continue;
         if (!k->post_ok) return VK_NULL_HANDLE;
         k->post_ok = false;
@@ -5175,6 +5215,13 @@ int vk_interp_images(void) { return ip_k; }  // (after vk_interp_begin)
 // N) into the game's textures (b holds it), as many times as wanted (vk_interp_images: how many to show); false: nothing
 // to show before N. Then vk_interp_end, either way.
 static bool ip_began;  // (vk_interp_end moves recording on only after a present that had it on)
+// LARECOMP_INTERP_REJ_LOG=1: each present without in-between images and why, each object kept at N
+static bool ip_rej_log(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INTERP_REJ_LOG") != NULL;
+    return on;
+}
+
 bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
     ip_began = false;
     if (!ip_enabled()) {
@@ -5184,6 +5231,7 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
         return false;
     }
     ip_began = true;
+    ip_keep = ip_keep_sets[ip_keep == ip_keep_sets[0]];
     ip_k = ip_images(period);
     IpFrame *cur = &ipf[ipc], *prev = &ipf[ipc ^ 1];
     bool ok = prev->valid && cur->valid && cur->nlists > 0 && !cur->overflow && !prev->overflow && b && b->image &&
@@ -5197,11 +5245,19 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
         else if (cur->destroyed != g_nvn_destroyed) ip_rej[2]++;
         else if (!structural) ip_rej[3]++;
         else ip_rej[4]++;
+        if (ip_rej_log())
+            LOG("[interp-rej] present %llu: %s (valid %d/%d lists %d overflow %d/%d destroyed %d/%d)\n",
+                (unsigned long long)renderer_present_count(),
+                !prev->valid || !cur->valid || cur->nlists == 0 ? "no previous frame" : cur->overflow || prev->overflow ? "overflow"
+                : cur->destroyed != g_nvn_destroyed ? "a texture destroyed" : !structural ? "format" : "a command list changed",
+                prev->valid, cur->valid, cur->nlists, prev->overflow, cur->overflow, (int)cur->destroyed, (int)g_nvn_destroyed);
     }
     if (ok) {
         // Per object, before the replay: the share of its changed float words that changed by a large step. Above
-        // LARECOMP_INTERP_OBJ_LIMIT (0.2) the object is not blended (ip_obj_rejected); when the rejected objects hold
-        // most of the frame's changes (a camera cut), there is no in-between image at all.
+        // LARECOMP_INTERP_OBJ_LIMIT (0.4) the object is not blended (ip_obj_rejected); when the rejected objects hold
+        // most of the frame's changes (a camera cut), there is no in-between image at all. (0.2 before: a walking
+        // skeleton at 30 fps has 0.20 - 0.25, and was kept at N one frame in two - with the camera still, the whole
+        // in-between image went, a 33 ms step several times a second at 2x. Swapped models and cuts: 0.5 - 0.95.)
         typedef struct { uint64_t obj, changed, big; } ObjAcc;
         static ObjAcc acc[IP_REJ];
         memset(acc, 0, sizeof acc);
@@ -5232,7 +5288,7 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
         extern bool fps60_menu(void);
         bool menu = fps60_menu();  // (menus: the cut checks are for battles; a menu screen changes by large steps all the time)
         static double obj_limit = -1;
-        if (obj_limit < 0) obj_limit = getenv("LARECOMP_INTERP_OBJ_LIMIT") ? atof(getenv("LARECOMP_INTERP_OBJ_LIMIT")) : 0.2;
+        if (obj_limit < 0) obj_limit = getenv("LARECOMP_INTERP_OBJ_LIMIT") ? atof(getenv("LARECOMP_INTERP_OBJ_LIMIT")) : 0.4;
         for (int i = 0; i < IP_REJ; i++)
             if (!menu && acc[i].obj && acc[i].changed >= 8 && (double)acc[i].big > obj_limit * (double)acc[i].changed) {
                 uint32_t sl = (uint32_t)((acc[i].obj >> 4) * 0x9E3779B1u) & (IP_REJ - 1);
@@ -5240,8 +5296,12 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
                 ip_rej_obj[sl] = acc[i].obj;
                 nrej++;
                 rej_changed += acc[i].changed;
+                if (ip_rej_log())
+                    LOG("[interp-obj] present %llu: object %#llx rejected, %llu of %llu changed words big (%.2f)\n",
+                        (unsigned long long)renderer_present_count(), (unsigned long long)acc[i].obj, (unsigned long long)acc[i].big,
+                        (unsigned long long)acc[i].changed, (double)acc[i].big / (double)acc[i].changed);
             }
-        if (getenv("LARECOMP_INTERP_DIAG"))
+        if (getenv("LARECOMP_INTERP_DIAG") || (ip_rej_log() && nrej))
             LOG("[interp-cut] present %llu: objects %d rejected %d (%llu of %llu changed words; big %llu)\n",
                 (unsigned long long)renderer_present_count(), nobj, nrej, (unsigned long long)rej_changed, (unsigned long long)changed,
                 (unsigned long long)big);

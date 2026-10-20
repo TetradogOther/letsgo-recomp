@@ -53,6 +53,9 @@ static void scan_region(const uint8_t *b, size_t size, void *arg) {
     }
 }
 
+static size_t g_len = 0x40;
+static bool g_noptr;
+
 static DWORD WINAPI scan_thread(LPVOID unused) {
     (void)unused;
     while ((long)renderer_game_frame() < g_frame) Sleep(50);
@@ -67,7 +70,8 @@ static DWORD WINAPI scan_thread(LPVOID unused) {
             dump(h - (uint64_t)g_back * 0x40, (size_t)g_back * 0x40);
         }
         LOG("[scan]   at %llx:\n", (unsigned long long)h);
-        dump(h, 0x40);
+        dump(h, g_len);
+        if (g_noptr) continue;
         uint64_t base = h - (uint64_t)g_back * 0x40;
         uint8_t ptr[8];
         memcpy(ptr, &base, 8);
@@ -91,6 +95,9 @@ __attribute__((constructor)) static void memscan_init(void) {
         g_pat[g_patlen++] = (uint8_t)strtoul(hex, NULL, 16);
     }
     if (getenv("LARECOMP_SCAN_BACK")) g_back = atoi(getenv("LARECOMP_SCAN_BACK"));
+    // LARECOMP_SCAN_LEN=<bytes> logged at each hit (default 0x40); LARECOMP_SCAN_NOPTR=1 skips the search for pointers to it
+    if (getenv("LARECOMP_SCAN_LEN")) g_len = (size_t)strtoul(getenv("LARECOMP_SCAN_LEN"), NULL, 0);
+    g_noptr = getenv("LARECOMP_SCAN_NOPTR") != NULL;
     if (g_patlen) CreateThread(NULL, 0, scan_thread, NULL, 0, NULL);
 }
 #endif

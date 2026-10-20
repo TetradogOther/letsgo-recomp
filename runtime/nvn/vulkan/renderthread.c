@@ -94,17 +94,11 @@ static void wait_work(void) {  // (holds lk; returns with a job queued)
         uint64_t due;
         if (!vk_pending_next(&due)) { pthread_cond_wait(&c_work, &lk); continue; }
         uint64_t now = SDL_GetTicksNS();
-        if (due > now + 2000000) {  // (wait for work or for 1 ms before it; then to the nanosecond)
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            uint64_t ns = (uint64_t)ts.tv_nsec + (due - now - 1000000);
-            ts.tv_sec += (time_t)(ns / 1000000000);
-            ts.tv_nsec = (long)(ns % 1000000000);
-            pthread_cond_timedwait(&c_work, &lk, &ts);
-            continue;
-        }
+        // Until it is due, slices of at most 1 ms with SDL's high-resolution timer, looking for work between them: a
+        // timed wait on the condition (winpthreads) woke up to ~7 ms late, absolute or relative - the scheduled image
+        // came with the next present instead (2x: shown in pairs, 15 / 2 ms apart instead of 8.3 / 8.3)
         pthread_mutex_unlock(&lk);
-        if (due > now) SDL_DelayPrecise(due - now);
+        if (due > now) SDL_DelayPrecise(due - now > 1000000 ? 1000000 : due - now);
         vk_pending_run(false);
         pthread_mutex_lock(&lk);
     }

@@ -34,7 +34,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SNAP=<quadro A>,<quadro B>` | copia as páginas não nulas do heap em A e, a cada 250 quadros a partir de B (30 vezes), lista os deltas pequenos mais comuns das palavras que cresceram (3 a 20 acertos) com endereços de exemplo; o ganho de XP de uma equipe é um delta compartilhado. O heap tem muito contador mudando, então o ruído é grande |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
-| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher com a seção "Teclado e mouse" aberta / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_TAB=<n>` | launcher aberto na página n (0 Jogo, 1 Gráficos, 2 Imagem e som, 3 Controles, 4 Mods; com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher na página "Controles" / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
 
 ## Travamentos e crashes
 | Ferramenta | Uso |
@@ -53,6 +54,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_RENDER_THREAD=0\|1` | a thread de renderização do backend Vulkan (padrão ligada; `render_thread = 0` no `larecomp.ini` também desliga). `vertex_read = auto\|copy\|direct` no ini equivale a `LARECOMP_VERTEX_READ`. `LARECOMP_HEAL_KEYS=1`: F5 faz toda textura reconferir a memória, F6 lê todos os vértices no lugar (pesquisa, HISTORICO 60) |
 | `LARECOMP_INTERP=1` + `LARECOMP_INTERP_MULT=<k>` | pesquisa: a interpolação por reexecução sempre ligada, com k imagens por present fixas (2..8; sem `_MULT`, 2). A geração de quadros do menu F12 (`frame_gen = 2 / 3 / 4`) usa a mesma interpolação com k escolhido pelo ritmo de cada quadro. `LARECOMP_WINDOW_SHOTS` grava `mid1`..`mid<k−1>` e `fin` (com k = 2, `mid`). Resultados: docs/PESQUISA-60FPS.md, "Multiplicador livre" |
 | `LARECOMP_FG_AT=<present>:<k>,...` | muda a geração de quadros para k (0, 2, 3, 4) naqueles presents, como o menu F12 |
+| `LARECOMP_PRESENT_LOG=<arquivo>` | CSV com cada imagem da janela: o present, quando a chamada saiu e quando chegou à tela (`VK_KHR_present_wait`, numa thread à parte): `id,frame,image,nimg,present_ms,shown_ms`. Mostra o ritmo da geração de quadros como ela é vista |
+| `LARECOMP_PENDING_LOG=1` | cada imagem agendada (geração de quadros) ao ser mostrada: o atraso sobre a sua hora e o avanço (`lead`) aprendido |
+| `LARECOMP_INTERP_REJ_LOG=1` | cada present sem imagens intermediárias e o motivo (`[interp-rej]`, `[interp-cut]`) e cada objeto mantido no quadro N (`[interp-obj]`: a fração das suas palavras que mudou muito; acima de `LARECOMP_INTERP_OBJ_LIMIT`, padrão 0,4, não é misturado) |
+| `LARECOMP_INTERP_JUMP_ABS=<unidades>` | (pesquisa) o termo absoluto do salto de uma palavra entre N-1 e N (padrão 100; era 4): acima de metade do seu tamanho e disso, a palavra - e o buffer inteiro - fica no quadro N |
 | `LARECOMP_POOL_FIX=0` | volta ao comportamento antigo do pool de texturas (slot no objeto host liberado), só contando no log `[nvn] texture pool: ...` (HISTORICO 60) |
 | `LARECOMP_INPUT_LOOP=<início>:<período>` | com `LARECOMP_INPUT`, repete as entradas de `[início, início + período)` para sempre; depois de cada batalha / captura fica parado 300 quadros, e dentro do encontro foge (B, três vezes para baixo, A). Usado por `tools/capture_loop.py run <nome>` / `scan <nome>` (pares antes/depois de cada encontro em `build/capture_loop/<nome>/`). `LARECOMP_INPUT_LOOP_CATCH=1`: dentro do encontro aperta A a cada 40 quadros em vez de fugir (prepara, arremessa e passa as telas da captura: experiência, Pokédex). No `capture_loop.py`, `--leg <quadros>` alonga cada trecho da caminhada (300 atravessa partes da área; o padrão 80 fica na mesma grama) e `EXE=<caminho>` roda outra build |
 | `LARECOMP_SHOT_RAW=<arquivo>` + `LARECOMP_SHOT_RAW_LAST=<quadro>` | a série `LARECOMP_SCREENSHOT_EVERY/FROM` vai para um arquivo cru (480x270 RGB por quadro, sem PNG) e o jogo sai no último quadro; lido por `tools/bateria_scan.py` |
@@ -84,7 +89,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_FNWATCH=<endereço>` + `LARECOMP_FNWATCH_FNS=<fn>,...` | (pesquisa) registra quando o float muda durante uma dessas funções (com várias threads, a função pode não ser a que escreve: prefira `LARECOMP_WATCH`) |
 | `LARECOMP_WATCH_AT=<presente>`, `LARECOMP_WATCH_MAX=<n>`, `LARECOMP_WATCH_LIKE=<presente>:<endereço>` | o `LARECOMP_WATCH` só a partir daquele presente; só as n primeiras escritas; e todas as palavras dos heaps com o valor daquele endereço naquele presente vigiadas (a varredura roda no presente, na thread do jogo). As escritas de até 16 bytes que cobrem a palavra (vetores SIMD) agora contam |
 | `LARECOMP_FPS_AT=<present>:<fps>,...` | muda o limite de quadros (30/60/120) naqueles presents, como o menu F12 |
-| `LARECOMP_MENU_PAGE=cfg/adv` | com `LARECOMP_MENU_AT`: abre a página principal / avançada do menu F12 em vez do menu de pausa |
+| `LARECOMP_SET_AT="<present>:<chave>=<valor>;..."` | aplica uma linha do `larecomp.ini` naquele present, como o menu F12 muda uma opção com o jogo rodando (ex.: `1300:ssao_level=3;1400:aa=taa`; sem espaços, para caber numa variável) |
+| `LARECOMP_MENU_PAGE=cfg/adv/<n>` | com `LARECOMP_MENU_AT`: abre as configurações do F12 (em vez do menu de pausa) na aba n - cfg a primeira (Gráficos), adv a Avançado |
 | `LARECOMP_UI2X_GENERATE=1` | a tela inicial gera as imagens da interface em 2x (`runtime/ui2x.c`, como o botão) e sai: status 0 se terminou; o passo a passo vai para o log (`[ui2x]`) |
 | `LARECOMP_TEXKEY_LOG=1` | registra a chave de conteúdo de cada textura enviada da CPU (`[texkey] <chave de 64 bits> <w>x<h> nvn <formato> ...`: CRC-32 e Adler-32 do nível 0 desentrelaçado, `ui2x_key`, a mesma de `cache/ui2x.pak`). `tools/ui_texkeys.py <romfs.bin> <saída.tsv> [<log>]` calcula a mesma chave para todas as texturas da interface nos arquivos do jogo e diz quais do log batem |
 | `LARECOMP_FONT_SCALE=<1..4>` | força a escala do texto (`runtime/hle/font_hires.c`) em vez da automática pela altura da janela; `1` desliga (para comparar) |
@@ -156,7 +162,7 @@ Não ligue debug info nos shaders para capturar: com milhares de shaders, o repl
 - **Ganchos** (runtime/fnhook.c): toda função gerada passa por `FN_ENTER`, que chama `rt_fnhook` enquanto houver
   gancho registrado (`rt_register_fnhook(addr, fn)`; `fn` devolve 1 para tratar a chamada no lugar do jogo;
   `rt_call_original` roda a função original de dentro do gancho). Mudar comportamento não exige gerar a DLL de novo.
-- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`): varre a memória mapeada do guest por esses bytes
+- `LARECOMP_SCAN="<bytes hex>[@<frame>]"` (+ `LARECOMP_SCAN_BACK=<n>`; `LARECOMP_SCAN_LEN=<bytes>` loga mais que 0x40 bytes por acerto, `LARECOMP_SCAN_NOPTR=1` pula a busca de ponteiros, que é lenta): varre a memória mapeada do guest por esses bytes
   (ex.: o hash de um registro em little-endian) quando o jogo chega ao frame (padrão 1300) e loga cada acerto, os 0x40
   bytes seguintes, `n` registros de 0x40 antes e os ponteiros para a base (runtime/hle/memscan.c, só Windows).
 - `LARECOMP_HOOK_DUMP="<addr>:<args>[;...]"` (endereço completo do guest, ex.: `700028ef70`; o offset do `main`

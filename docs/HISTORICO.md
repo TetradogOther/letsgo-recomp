@@ -323,3 +323,64 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   e o jogo segue com a captura dele. Testado nos dois jogos: save da Rota 1, 3 encontros em cada, todos na captura e
   sem crash; com o Pidgey no slot 0, a batalha continua. **Falta:** batalha também sem acompanhante (a correção
   completa).
+
+## Batalha selvagem: o inicial andando sozinho (19/10/2026, issue #6, 0.4.2)
+- **Dois relatos depois da 0.4.1.** O usuário, com o Eevee na frente e o Bulbasaur andando junto, caiu na captura sem
+  precisar: o caso "com acompanhante" tinha sido testado só com o Pidgey movido para o slot 0, e as rodadas com o save
+  dele não acharam encontro (não conferi). O Vaskiemaia, com o Oddish na frente, teve batalha, mas o jogo fechou ao
+  trocar para o Pikachu (vídeo; log com o mesmo `f_7000a9ddc0`, Pikachu).
+- **Vocabulário do jogo.** Nos nativos de script, "partner" é o Pokémon que anda com o jogador e "buddy" é o inicial
+  (`f_70001760d0`: Pikachu forma 8 ou Eevee forma 1). `f_70002462e0(0, &slot)` (o `GetPartnerIndex_`) dá o slot de
+  quem anda junto, não do inicial. No save, o cabeçalho da equipe (`+0x5A00`) tem quem anda junto no slot 0; os
+  blocos do save são conferidos por CRC16-ARC (tabela `FEEB` no fim: tamanho, id, checksum).
+- **A causa.** Em batalha simples, `f_7000a88780` (abertura) e `f_7000a8ced0` (troca) mandam o inicial com
+  `ee422.bseq` (o método virtual `f_7000a7e090` pergunta se é o inicial); os outros vão com `ee420.bseq` (Poké Ball). A
+  `ee422` leva para a batalha o modelo de campo de quem anda junto; com o inicial andando sozinho, a batalha estática
+  não tem esse modelo e `f_7000a9ddb0` lê um nulo. Por isso quebra também na troca.
+- **O que não resolveu.** Os scripts das batalhas estáticas do jogo (`bin/archive/script_amx.gfpak`, AMX de 64 bits em
+  codificação compacta; nomes de nativos pelo hash `h = h * 0x83 ^ byte`, achado no registrador `f_70006705e0`)
+  recolhem quem anda junto e o inicial montado antes do `CallWildBattle` (`StartFollowPartnerIntoTheBall_` =
+  `f_7000243bb0`, `StartRidePartnerIntoTheBall_` = `f_7000243d90`). Chamar isso antes da batalha, com ou sem espera,
+  apagar os dois (`f_7000244440`, `f_7000244620`), fazê-lo reaparecer montado (`f_7000244270`, recusa), outro molde
+  (Electrode) e forçar a `ee420` (ela tem o ramo do inicial no ombro e quebra em `f_7000adc1f0` -> `f_7000a9bf20`)
+  não resolveram.
+- **Correção (proteção, 0.4.2).** No toque (`starter_walks_alone`), se quem anda junto é o próprio inicial (ou ninguém),
+  o encontro vai para a captura do jogo; com outro Pokémon andando junto, batalha, e o inicial pode entrar. A regra da
+  0.4.1 ("inicial no slot 0") sai.
+- **Ferramentas.** `LARECOMP_SCAN_LEN` / `LARECOMP_SCAN_NOPTR` na varredura de memória (docs/DEPURACAO.md).
+  **Lição:** um caso só conta como testado quando o log mostra o evento dele; testar com cópia do save do usuário.
+
+## SSAO e GI piscando com a câmera em movimento (19/10/2026, PR #16 do Vancete)
+
+- **Sintoma.** Com a oclusão de ambiente (SSAO) ou a luz indireta (GI) ligadas, partes da cena (pedras, arbustos,
+  personagens) ganhavam e perdiam o efeito enquanto a câmera se mexia, como se ele ligasse e desligasse. Visto pelo
+  usuário na batalha e andando no ginásio de Pewter; já existia antes do PR.
+- **Diagnóstico.** Em partidas automáticas o SSAO rodava em todo quadro, com histórico temporal mantido, e quadros
+  seguidos não destoavam. Um dump da oclusão na batalha (`LARECOMP_SSAO_DUMP`) só tinha as árvores do fundo. Contando
+  os desenhos opacos antes e depois do SSAO em cada quadro: na batalha, 30 antes e 29-30 depois; andando no ginásio de
+  Pewter, de 34 a 68 antes (de cerca de 130), mudando de um quadro para outro.
+- **Causa.** O efeito era aplicado no primeiro desenho translúcido depois de 16 opacos. O Let's Go desenha translúcidos
+  no meio dos opacos, então o que vinha depois ficava sem oclusão e sem luz indireta, e a fronteira andava com a
+  câmera (culling e ordem dos desenhos).
+- **Correção.** O SSAO e a GI rodam quando o passe da cena termina, com todos os opacos desenhados
+  (`ssao_draw_hook`, exec.c). Pewter: 118-128 opacos antes, nenhum depois, em todos os quadros.
+- **Segunda causa (batalhas e capturas).** Depois da primeira correção, ainda piscava na batalha, mais visível na
+  cena da treinadora derrotada. Um build com diagnóstico (o usuário reproduziu, o log contou) mostrou o alvo da cena
+  estável, nenhum desenho fora e o histórico mantido, mas a câmera do quadro mudando: a cada poucos quadros, o slot de
+  constantes dos desenhos da cena (vertex cbuf 5, +64) tinha uma câmera na origem (view sem translação, espelhada,
+  near 16 e sem far: a do céu), em todos os desenhos daquele quadro, e a da cena não estava em slot nenhum como
+  projeção própria. O SSAO e a GI liam a profundidade com essa câmera nesses quadros. A máscara de constantes do
+  shader não ajudou (não marca esse slot nem nos quadros bons).
+- **Correção.** Uma câmera na origem não é a da cena (`cam_at_origin`); sem câmera no quadro, vale a do quadro anterior
+  se tiver até 8 quadros, parada (`ssao_settle_camera`, no fim do passe). Três batalhas: 197 a 554 quadros com a câmera
+  na origem, todos menos 1 a 9 (começo de cena) cobertos.
+- **Efeito colateral corrigido.** Aplicado no fim do passe, o efeito pegava também o fade que o jogo desenha por cima
+  da cena no mesmo alvo: na abertura (fade a partir do branco), a grama aparecia cinza através do branco. Agora ele
+  entra antes do primeiro desenho sem teste de profundidade depois dos opacos (um fade, as passadas de tela cheia), ou
+  no fim do passe; os translúcidos 3D no meio da cena testam profundidade e não disparam. Pewter continua com nenhum
+  opaco depois do efeito.
+- **Não era deste problema.** As faixas horizontais nos quadros escuros da troca de mapa vêm do pacote da interface 2x
+  (somem com `ui2x = 0`, com ou sem SSAO/GI; existem desde a 0.4.0).
+- **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
+- **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
+  ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).

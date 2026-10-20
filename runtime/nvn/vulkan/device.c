@@ -139,14 +139,21 @@ void vk_device_fault_report(void) {
             (unsigned long long)vend[i].vendorFaultData);
 }
 
+static bool g_present_log;
+
 static void create_device(void) {
     uint32_t ne = 0;
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[8];
+    const char *ext[12];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    // LARECOMP_PRESENT_LOG=<file>: when each window image reached the screen (present_log_*: VK_KHR_present_wait)
+    g_present_log = getenv("LARECOMP_PRESENT_LOG") && has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
+                    has_ext(ep, ne, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+    if (g_present_log) ext[n_ext++] = VK_KHR_PRESENT_ID_EXTENSION_NAME, ext[n_ext++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+    else if (getenv("LARECOMP_PRESENT_LOG")) LOG("[vk] LARECOMP_PRESENT_LOG: the driver has no VK_KHR_present_wait\n");
     g_vk.custom_border = has_ext(ep, ne, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     if (g_vk.custom_border) ext[n_ext++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
     g_vk.divisor = has_ext(ep, ne, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
@@ -189,6 +196,11 @@ static void create_device(void) {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR, .pipelineExecutableInfo = VK_TRUE,
         .pNext = f.pNext};
     if (g_pipe_exec_stats) f.pNext = &pe;
+    VkPhysicalDevicePresentWaitFeaturesKHR pw = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR,
+                                                 .presentWait = VK_TRUE, .pNext = f.pNext};
+    VkPhysicalDevicePresentIdFeaturesKHR pid = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR,
+                                                .presentId = VK_TRUE, .pNext = &pw};
+    if (g_present_log) f.pNext = &pid;
     VkPhysicalDeviceFeatures *b = &f.features, *h = &have.features;
     b->independentBlend = h->independentBlend;
     b->dualSrcBlend = h->dualSrcBlend;
@@ -442,6 +454,35 @@ static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
     image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 }
 
+// LARECOMP_PRESENT_LOG=<file>: each window image's present call and the time it reached the screen (a thread waits
+// for each with vkWaitForPresentKHR): "id,frame,image,nimg,present_ms,shown_ms" (ms since the first image)
+static struct { uint64_t id, frame, t; int image, nimg; } pl_q[256];
+static uint64_t pl_head, pl_tail, pl_id, pl_t0;
+static pthread_mutex_t pl_lk = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pl_cv = PTHREAD_COND_INITIALIZER;
+static void *present_log_main(void *arg) {
+    FILE *f = arg;
+    PFN_vkWaitForPresentKHR wait = (PFN_vkWaitForPresentKHR)vkGetDeviceProcAddr(g_vk.dev, "vkWaitForPresentKHR");
+    fputs("id,frame,image,nimg,present_ms,shown_ms\n", f);
+    for (;;) {
+        pthread_mutex_lock(&pl_lk);
+        while (pl_head == pl_tail) pthread_cond_wait(&pl_cv, &pl_lk);
+        __typeof__(pl_q[0]) e = pl_q[pl_head % 256];
+        pthread_mutex_unlock(&pl_lk);
+        VkResult r = wait(g_vk.dev, g_vk.swapchain, e.id, 200000000);
+        uint64_t now = SDL_GetTicksNS();
+        pthread_mutex_lock(&pl_lk);
+        pl_head++;
+        pthread_mutex_unlock(&pl_lk);
+        fprintf(f, "%llu,%llu,%d,%d,%.3f,%.3f%s\n", (unsigned long long)e.id, (unsigned long long)e.frame, e.image, e.nimg,
+                (e.t - pl_t0) / 1e6, (now - pl_t0) / 1e6, r == VK_SUCCESS ? "" : ",fail");
+        if (e.id % 64 == 0) fflush(f);
+    }
+    return NULL;
+}
+static uint64_t pl_frame; static int pl_image, pl_nimg;
+void vk_present_log_tag(uint64_t frame, int image, int nimg) { pl_frame = frame, pl_image = image, pl_nimg = nimg; }
+
 // End rendering into the window image and present it. shot_path: also save the window image as PNG.
 void vk_frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
@@ -459,7 +500,34 @@ void vk_frame_end(const char *shot_path) {
     static int trace = -1;
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
     if (trace) LOG("[vk] present image %u\n", img);
+    VkPresentIdKHR pidi = {.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1};
+    uint64_t id = 0;
+    if (g_present_log) {
+        static bool started;
+        if (!started) {
+            started = true;
+            pl_t0 = SDL_GetTicksNS();
+            FILE *f = fopen(getenv("LARECOMP_PRESENT_LOG"), "w");
+            pthread_t th;
+            if (f) pthread_create(&th, NULL, present_log_main, f);
+            else g_present_log = false;
+        }
+        id = ++pl_id;
+        pidi.pPresentIds = &id;
+        pi.pNext = &pidi;
+    }
+    uint64_t tpres = SDL_GetTicksNS();
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+    if (g_present_log) {
+        pthread_mutex_lock(&pl_lk);
+        if (pl_tail - pl_head < 256) {
+            pl_q[pl_tail % 256].id = id, pl_q[pl_tail % 256].frame = pl_frame, pl_q[pl_tail % 256].t = tpres;
+            pl_q[pl_tail % 256].image = pl_image, pl_q[pl_tail % 256].nimg = pl_nimg;
+            pl_tail++;
+            pthread_cond_signal(&pl_cv);
+        }
+        pthread_mutex_unlock(&pl_lk);
+    }
     if (trace) LOG("[vk] presented: %d\n", r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
     cur_frame.ok = false;
@@ -609,6 +677,9 @@ static void present_image(TexBackend *b, bool final, int image, int nimg, uint64
                 snprintf(lpath, sizeof lpath, "build/frames/%s_%ld.png", final ? "fin" : mid, list[i]);
                 path = lpath;
             }
+        extern void vk_present_log_tag(uint64_t frame, int image, int nimg);
+        vk_present_log_tag(frame, image, nimg);
+        vk_present_log_tag(frame, image, nimg);
         vk_frame_end(path);
         g_window_images++;
         if (final && shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
@@ -620,16 +691,41 @@ static void present_image(TexBackend *b, bool final, int image, int nimg, uint64
 // ---- the images of a present, on schedule
 // With frame interpolation a present has k images (exec.c vk_interp_*): the k - 1 in-between ones, rendered and kept
 // at once (the next frame's recording clears what they are made of), then frame N's own, a k-th of the period apart.
-// The first is shown at once and the others wait here: the render thread shows them when they are due, between the
-// next frame's jobs or while it has none (renderthread.c), so the game goes on meanwhile; without it this thread waits.
-typedef struct { TexBackend *b; bool final; int image, nimg; uint64_t frame, due; } Pending;
+// They wait here: the render thread shows them when they are due, between the next frame's jobs or while it has none
+// (renderthread.c), so the game goes on meanwhile; without it this thread waits.
+// Evenly apart, all of them: the first one is not shown as soon as it is rendered but `ip_lead` after the present (the
+// replays' time on the GPU, learnt below), on a timeline that follows the game's presents smoothly. Shown at once, the
+// first came early and the last on time: at 2x, 6.7 / 10 ms apart instead of 8.3 / 8.3 - the window's rate doubled
+// but the motion went in steps of two, much of the smoothness gone (LARECOMP_PRESENT_LOG shows it).
+typedef struct { TexBackend *b; bool final; int image, nimg; uint64_t frame, due, seq; } Pending;
 static Pending pend[16];
 static int pend_n;
+static uint64_t ip_lead = 2000000;  // ns from the present's time on the timeline to its first image
 
 // The scheduled images due by now (all: every one, now - the next present's must not come before them)
 void vk_pending_run(bool all) {
     while (pend_n) {
         if (!all && pend[0].due > SDL_GetTicksNS()) return;
+        Pending p = pend[0];
+        memmove(pend, pend + 1, (size_t)--pend_n * sizeof *pend);
+        if (p.seq && !all) {  // (the GPU not done with it by its time: more lead; done: a little less, slowly)
+            extern uint64_t vk_completed_seq(void);
+            if (vk_completed_seq() < p.seq) ip_lead = ip_lead + 250000 > 12000000 ? 12000000 : ip_lead + 250000;
+            else if (ip_lead > 500000) ip_lead -= 5000;
+        }
+        static int plog = -1;  // LARECOMP_PENDING_LOG=1: each scheduled image's lateness when it is shown
+        if (plog < 0) plog = getenv("LARECOMP_PENDING_LOG") != NULL;
+        if (plog) {
+            LOG("[pend] f%llu %d/%d late %.2f ms (lead %.2f)%s\n", (unsigned long long)p.frame, p.image, p.nimg,
+                ((int64_t)SDL_GetTicksNS() - (int64_t)p.due) / 1e6, ip_lead / 1e6, all ? " all" : "");
+        }
+        present_image(p.b, p.final, p.image, p.nimg, p.frame);
+    }
+}
+
+// The images of the presents before `frame` still waiting (their kept images are about to be written again)
+static void pending_run_before(uint64_t frame) {
+    while (pend_n && pend[0].frame < frame) {
         Pending p = pend[0];
         memmove(pend, pend + 1, (size_t)--pend_n * sizeof *pend);
         present_image(p.b, p.final, p.image, p.nimg, p.frame);
@@ -660,7 +756,9 @@ void backend_present(NvnTexture *t) {
         extern void backend_pool_written(uint64_t addr, uint64_t size);
         if (g_heal_tex) { g_heal_tex = 0; backend_pool_written(0x7000000000ull, 0x320000000ull); }
     }
-    vk_pending_run(true);  // (the last present's images still waiting: before this one's, whose replays reuse their slots)
+    // (the images of the present before last still waiting: this one's replays write their kept images - exec.c keeps
+    // two sets; the last present's can wait for their time)
+    if (total_frames) pending_run_before(total_frames - 1);
     g_last_presented = t;
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
@@ -683,6 +781,14 @@ void backend_present(NvnTexture *t) {
     extern int vk_interp_images(void);
     bool inter = vk_interp_begin(b, &hold, period);
     int nimg = inter ? vk_interp_images() : 1;
+    // the timeline: a period after the last present's time, pulled toward this one's (t0 jitters with the jobs before
+    // it); a jump (a stall, a change of rate) takes t0
+    static uint64_t tl;
+    int64_t off = (int64_t)(t0 - (tl + period));
+    if (!tl || off > (int64_t)period / 2 || off < -(int64_t)period / 2) tl = t0;
+    else tl = tl + period + off / 8;
+    if (!inter) vk_pending_run(true);  // (the game's own texture, shown now: after any image still waiting)
+    extern uint64_t vk_pending_seq(void);
     for (int image = 0; image < nimg && pend_n < 16; image++) {
         bool final = image == nimg - 1;
         TexBackend *img = final ? (inter ? hold : b) : NULL;
@@ -690,10 +796,12 @@ void backend_present(NvnTexture *t) {
             vk_interp_replay((float)(image + 1) / (float)nimg);
             img = vk_interp_keep(b, image);
         }
-        pend[pend_n++] = (Pending){img, final, image, nimg, total_frames, t0 + period * (uint64_t)image / (uint64_t)nimg};
-        vk_pending_run(false);  // (the first at once; the others if their replays took past their time)
+        uint64_t due = inter ? tl + ip_lead + period * (uint64_t)image / (uint64_t)nimg : t0;
+        pend[pend_n++] = (Pending){img, final, image, nimg, total_frames, due, inter ? vk_pending_seq() : 0};
+        vk_pending_run(false);  // (the last present's images due meanwhile)
     }
     vk_interp_end();
+    if (inter) renderer_submit();  // (the GPU starts on the replays now, not when the first image is shown)
     if (!rt_active()) pending_wait_all();
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
@@ -739,6 +847,24 @@ void backend_present(NvnTexture *t) {
             int fps = *p == ':' ? (int)strtol(p + 1, (char **)&p, 10) : 30;
             if (at == (long)total_frames) { g_settings.fps = fps; LOG("[vk] frame rate limit %d (LARECOMP_FPS_AT)\n", fps); }
             if (*p == ',') p++; else break;
+        }
+    }
+    {   // LARECOMP_SET_AT="<present>:<key> = <value>;...": a larecomp.ini line applied at that present, as the F12 menu
+        // changes a setting while the game runs (tests of switching one: SSAO / GI levels, the anti-aliasing...)
+        const char *e = getenv("LARECOMP_SET_AT");
+        for (const char *p = e; p && *p;) {
+            long at = strtol(p, (char **)&p, 10);
+            const char *end = strchr(p, ';');
+            if (*p == ':' && at == (long)total_frames) {
+                char line[160];
+                int n = (int)(end ? end - p - 1 : (long)strlen(p + 1));
+                snprintf(line, sizeof line, "%.*s", n < 0 ? 0 : n, p + 1);
+                extern void settings_set_line(const char *line);
+                settings_set_line(line);
+                LOG("[vk] setting \"%s\" (LARECOMP_SET_AT)\n", line);
+            }
+            if (!end) break;
+            p = end + 1;
         }
     }
     {   // LARECOMP_RENDERDOC_AT=<frame>: under RenderDoc (renderdoccmd capture), capture the frame after that one
@@ -827,7 +953,8 @@ void backend_present(NvnTexture *t) {
     if (now - last_fps_time >= fps_iv) {
         static uint64_t img_prev;  // (the images that reached the window: with frame interpolation, k per frame)
         if (last_fps_time > 0 && g_window_images - img_prev != frames)
-            LOG("[vk] t=%.1f window %.1f fps\n", now, (double)(g_window_images - img_prev) / (now - last_fps_time));
+            LOG("[vk] t=%.1f window %.1f fps (lead %.1f ms)\n", now, (double)(g_window_images - img_prev) / (now - last_fps_time),
+                ip_lead / 1e6);
         img_prev = g_window_images;
         if (last_fps_time > 0)
             LOG("[vk] t=%.1f frame %llu %.1f fps max %.0fms (%s)\n", now, (unsigned long long)total_frames,

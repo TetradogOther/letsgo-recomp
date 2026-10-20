@@ -135,15 +135,24 @@ static int64_t dir_lookup(const uint8_t *dm, uint64_t dsz, const char *path) {
 }
 
 static void add_new_files(int fd, const uint64_t *h, const uint8_t *dmeta, uint64_t dsz, uint64_t fsz) {
-    if (!mod_romfs_dir()) return;  // a mod's new files (runtime/mods.h)
-    char root[1100];
-    snprintf(root, sizeof root, "%s", mod_romfs_dir());
+    const char *roots[MODS_MAX];  // the active mods' new files (runtime/mods.h), the first mod's where two have one
+    int nroots = mod_romfs_dirs(roots, MODS_MAX);
+    if (!nroots) return;
     char **known = malloc(sizeof *known * rom_nfiles);
     for (int i = 0; i < rom_nfiles; i++) known[i] = rom_files[i].path;
     qsort(known, rom_nfiles, sizeof *known, path_cmp);
     NewFile *nf = NULL;
     int n = 0, cap = 0;
-    walk_new(root, "", known, rom_nfiles, &nf, &n, &cap);
+    for (int r = 0; r < nroots; r++) {
+        int from = n;
+        walk_new(roots[r], "", known, rom_nfiles, &nf, &n, &cap);
+        for (int i = from; i < n;) {  // (already added by a mod before this one: that one's stays)
+            bool dup = false;
+            for (int j = 0; j < from && !dup; j++) dup = !strcmp(nf[i].rel, nf[j].rel);
+            if (dup) nf[i] = nf[--n];
+            else i++;
+        }
+    }
     free(known);
     if (!n) return;
     rom_files = realloc(rom_files, sizeof(RomFile) * (rom_nfiles + n));

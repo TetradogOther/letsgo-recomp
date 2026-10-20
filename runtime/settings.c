@@ -49,7 +49,8 @@ Settings g_settings = {
     .show_fps = false,
     .render_thread = true,
     .vertex_read = VREAD_AUTO,
-    .upscaler = UPSCALE_BILINEAR,
+    .upscaler = UPSCALE_SHARP,
+    .upscaler_pick = UPSCALE_SHARP,
     .antialias = AA_SMAA,  // (the game has no anti-aliasing of its own)
 };
 
@@ -57,10 +58,10 @@ Settings g_settings = {
 // next save.
 static void parse_line(const char *line) {
     char key[64];
-    char val[128];
-    if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) < 1) return;
+    char val[1100];  // (the mods list can be long)
+    if (sscanf(line, " %63[^= ] = %1099[^\n]", key, val) < 1) return;
     if (!strcmp(key, "game_lang") || !strcmp(key, "mod")) {  // (may be empty)
-        if (sscanf(line, " %63[^= ] = %127[^\n]", key, val) != 2) val[0] = 0;
+        if (sscanf(line, " %63[^= ] = %1099[^\n]", key, val) != 2) val[0] = 0;
         if (key[0] == 'g') strlcpy(g_settings.game_lang, val, sizeof g_settings.game_lang);
         else strlcpy(g_settings.mod, val, sizeof g_settings.mod);
         return;
@@ -96,8 +97,11 @@ static void parse_line(const char *line) {
                               !strcmp(val, "50%") ? RES_Q50 : !strcmp(val, "25%") ? RES_Q25 :
                               (n >= 1 && n <= 4) ? n : n > 4 ? 4 : RES_MATCH;
     }
-    // (an older file's upscaler: FSR 3.1 is an anti-aliasing choice now, the rest is bilinear)
-    else if (!strcmp(key, "upscaler")) { if (!strcmp(val, "fsr3")) g_settings.antialias = AA_FSR3; }
+    // (after "aa" in the file. An older file's "fsr3": FSR 3.1 is an anti-aliasing choice now)
+    else if (!strcmp(key, "upscaler")) {
+        if (!strcmp(val, "fsr3")) g_settings.antialias = AA_FSR3;
+        else g_settings.upscaler_pick = !strcmp(val, "bilinear") ? UPSCALE_BILINEAR : UPSCALE_SHARP;
+    }
     // (an older "antialias = off" was only LAS Recomp's default being saved: a new key, so SMAA starts on)
     else if (!strcmp(key, "smaa")) g_settings.antialias = atoi(val) != 0 ? AA_SMAA : AA_OFF;
     // (after "smaa" in the file: the choice among the three; "smaa" stays for older versions)
@@ -134,7 +138,8 @@ void settings_clamp_color(void) {
 // SSAO and GI by level (F12 menu). High: the parameters they had before the levels (SSAO 16 samples; GI 4 rays x 8
 // steps at half the scene's size). Medium and low keep the look (strength, reach, accumulation over frames) with less
 // work: SSAO 12 / 8 samples (the accumulation evens out the noise); GI 3 rays x 6 steps at half the size, 2 x 6 at a
-// third (about 1/2 and 1/6 of high's). The upscaler: FSR 3.1 when it is the anti-aliasing, else bilinear.
+// third (about 1/2 and 1/6 of high's). The upscaler: FSR 3.1 when it is the anti-aliasing, else the one picked (FSR 1
+// or bilinear).
 void settings_apply_levels(void) {
     int s = g_settings.ssao_level < FX_OFF || g_settings.ssao_level > FX_HIGH ? FX_OFF : g_settings.ssao_level;
     int g = g_settings.gi_level < FX_OFF || g_settings.gi_level > FX_HIGH ? FX_OFF : g_settings.gi_level;
@@ -148,8 +153,15 @@ void settings_apply_levels(void) {
     g_settings.gi_rays = gi_rays[g], g_settings.gi_steps = gi_steps[g], g_settings.gi_div = gi_div[g];
     g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f, g_settings.gi_temporal = true;
     if (g_settings.antialias < AA_OFF || g_settings.antialias > AA_FSR3) g_settings.antialias = AA_SMAA;
-    g_settings.upscaler = g_settings.antialias == AA_FSR3 ? UPSCALE_FSR3 : UPSCALE_BILINEAR;
+    if (g_settings.upscaler_pick != UPSCALE_BILINEAR) g_settings.upscaler_pick = UPSCALE_SHARP;
+    g_settings.upscaler = g_settings.antialias == AA_FSR3 ? UPSCALE_FSR3 : g_settings.upscaler_pick;
     if (g_settings.frame_gen < 2 || g_settings.frame_gen > 4) g_settings.frame_gen = 0;
+}
+
+// One larecomp.ini line applied now, then the settings that follow from it (LARECOMP_SET_AT: runtime/nvn/vulkan/device.c)
+void settings_set_line(const char *line) {
+    parse_line(line);
+    settings_apply_levels();
 }
 
 void settings_load(void) {
@@ -158,7 +170,7 @@ void settings_load(void) {
     loaded = true;
     FILE *f = fopen(SETTINGS_FILE, "r");
     if (!f) { settings_apply_levels(); return; }
-    char line[256];
+    char line[1200];  // (the mods list can be long)
     while (fgets(line, sizeof line, f)) {
         // (a file edited by hand may have CRLF: "resolution = dynamic\r" did not match and fell back silently)
         for (size_t n = strlen(line); n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '); n--) line[n - 1] = 0;
@@ -192,6 +204,7 @@ void settings_save(void) {
     fprintf(f, "smaa = %d\n", g_settings.antialias != AA_OFF);
     fprintf(f, "aa = %s\n", g_settings.antialias == AA_FSR3 ? "fsr3" : g_settings.antialias == AA_TAA ? "taa" :
                             g_settings.antialias == AA_SMAA ? "smaa" : "off");
+    fprintf(f, "upscaler = %s\n", g_settings.upscaler_pick == UPSCALE_BILINEAR ? "bilinear" : "fsr1");  // (FSR 3.1: "aa")
     fprintf(f, "taa_sharpness = %.2f\n", g_settings.taa_sharpness);
     static const char *const presets[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "fsr3_preset = %s\n", presets[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1]);
