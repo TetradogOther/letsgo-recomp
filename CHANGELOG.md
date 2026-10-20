@@ -25,7 +25,14 @@
   screen, where 4x needs ~16.8 ms of GPU a frame (a fixed 4x drops the world to 50 fps and the images go uneven), 2x.
   With a variable-refresh display, `LARECOMP_FG_VRR=1` drops the refresh grid (docs/DEPURACAO.md).
 - **Frame generation: no more shadows of bushes and trees where there are none** (walking right from Viridian's sign,
-  and elsewhere): an in-between image drew a shadow caster at another copy's place. The same mesh drawn twice in the
+  starting to walk right in front of Pewter's gym, and elsewhere): an in-between image drew a shadow caster at another
+  copy's place. Each draw of the frame before is now the partner of one draw of N only, the closest to it (once per
+  present, for all its in-between images): a copy coming into view takes another's place in the order of the draws, and
+  wanted that copy's partner - which the copy, the same in both frames, matches exactly; it now keeps frame N's
+  constants. Pewter: a tree drawn three times in the shadow map, then four, the new one 900 - 1250 units from any of
+  them; the dark area where its shadow showed, 7510 samples -> 0 (`LARECOMP_INTERP_ONE_TO_ONE=0` compares); a walk there
+  otherwise the same (flicker 1.21 / 1.23 % of the blocks, 91 % of the moving blocks halfway; 1 - 2 draws a frame lose
+  their partner). Viridian's case before it: The same mesh drawn twice in the
   shadow map (x 1420 and 2670), the second coming into its view in frame N: the only candidate in N-1 was the first,
   1250 units away, and the jump test for a draw paired by content (half the two values and 100 units) let it through.
   A partner found by content that moved a word by more than a quarter of the two values and 50 units is now another copy:

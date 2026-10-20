@@ -2966,6 +2966,7 @@ static bool ip_three_ok;  // (three frames in a row: N-2 known - ip_cbuf's alter
 static uint64_t ip_stats_curved;  // (words blended along the curve)
 static uint64_t ip_stats_alt;     // (words alternating between two values: kept at N)
 static uint64_t ip_stats_other_copy;  // (draws whose closest partner by content was another copy: kept at N)
+static uint64_t ip_stats_taken;       // (draws whose partner was closer to another draw: kept at N, ip_pair_all)
 // The quadratic through c (N-2, at -1), a (N-1, at 0) and b (N, at 1), at t
 static float ip_curve3(float c, float a, float b, float t) { return a + t * (b - c) * 0.5f + t * t * (b - 2.0f * a + c) * 0.5f; }
 // ... for a word that moved in both steps by a smooth change: its acceleration (b - 2a + c) at most a quarter of the two
@@ -5072,6 +5073,12 @@ typedef struct {
     uint32_t ndr, drcap;
     uint32_t *drtab;  // open addressing: (sig, occ) -> dr index + 1
     uint32_t *dr_by_shape, dr_by_shape_cap;  // draw indices sorted by shape, built when first needed
+    // each draw's partner in the frame before (ip_pair_all, once for the present's in-between images): its index there,
+    // IP_PAIR_ANY (none found: ip_cbuf's ip_pick decides) or IP_PAIR_NONE (frame N's constants)
+    int32_t *pair;
+    float *pair_dist;
+    uint32_t paircap;
+    bool paired;
     bool dr_sorted;
     IpVtx *vx;  // the draws' small vertex streams (ip_vtx_stream): their bytes in vdata
     uint32_t nvx, vxcap;
@@ -5153,7 +5160,7 @@ static const IpEntry *ip_find(const IpFrame *f, uint64_t key) {
 
 static void ip_frame_clear(IpFrame *f) {
     f->n = 0; f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false; f->ndr = 0; f->dr_sorted = false;
-    f->nvx = 0; f->vused = 0;
+    f->nvx = 0; f->vused = 0; f->paired = false;
     if (f->drtab) memset(f->drtab, 0, IP_TAB * sizeof *f->drtab);
     if (f->tab) memset(f->tab, 0, IP_TAB * sizeof *f->tab);
 }
@@ -5301,11 +5308,14 @@ static int ip_shape_cmp(const void *x, const void *y) {
 // cbuf (3) and their own offsets in the next (4), and ties took any clump's offsets - clumps squashed, shifted and
 // missing in the in-between images while walking (offsets 252 -> 49 units where the wind moves them 1 or 2). The game
 // also reuses vertex buffers between copies, so the address in the identity can name another copy.
-static void ip_pair_draw(void) {
+#define IP_PAIR_ANY (-1)
+#define IP_PAIR_NONE (-2)
+// The partner of draw n (N) in the frame before, as above; *d: how far (0: the same constants)
+static int32_t ip_pair_find(const IpDraw *n, float *d_out) {
     IpFrame *fc = &ipf[IP_PREV];
-    const IpDraw *n = ip_draw_find(&ipf[ipc], ip_draw_sig, ip_draw_occ);
-    if (!n || !n->count || !fc->ndr) return;
-    const IpDraw *o0 = ip_draw_find(fc, ip_draw_sig, ip_draw_occ), *best = o0;
+    *d_out = INFINITY;
+    if (!n->count || !fc->ndr) return IP_PAIR_ANY;
+    const IpDraw *o0 = ip_draw_find(fc, n->sig, n->occ), *best = o0;
     float bd = o0 ? ip_draw_dist(n, o0, INFINITY) : INFINITY;
     if (bd > 0) {
         if (!fc->dr_sorted) {
@@ -5326,16 +5336,67 @@ static void ip_pair_draw(void) {
             if (d < bd) bd = d, best = c;
         }
     }
-    if (best && best != o0 && ip_draw_jumps(n, best)) best = o0;  // (the closest jumps: the identity's own, if any)
+    if (best && best != o0 && ip_draw_jumps(n, best)) best = o0, bd = o0 ? ip_draw_dist(n, o0, INFINITY) : INFINITY;  // (the closest jumps: the identity's own, if any)
     static int other = -1;  // (LARECOMP_INTERP_OTHER_COPY=0: comparison, the check off)
     if (other < 0) other = getenv("LARECOMP_INTERP_OTHER_COPY") ? atoi(getenv("LARECOMP_INTERP_OTHER_COPY")) : 1;
     if (other && best && best != o0 && ip_draw_other_copy(n, best)) {  // (another copy of it: none - frame N's constants, ip_cbuf)
-        if (!o0) { ip_part_set = true, ip_part_sig = 0, ip_part_occ = ~0u; ip_stats_other_copy++; return; }
-        best = o0;
+        if (!o0) { ip_stats_other_copy++; return IP_PAIR_NONE; }
+        best = o0, bd = ip_draw_dist(n, o0, INFINITY);
     }
-    if (!best) return;
+    if (!best) return IP_PAIR_ANY;
     if (best != o0) ip_stats_content++;
-    ip_part_set = true, ip_part_sig = best->sig, ip_part_occ = best->occ;
+    *d_out = bd;
+    return (int32_t)(best - fc->dr);
+}
+// Every draw's partner, once a present (the first in-between image), one to one: a draw of N-1 is the partner of the
+// draw of N closest to it, the others that wanted it get none and keep frame N's constants. A copy of a mesh that comes
+// into view in N takes the place of one in the order of its draws (Pewter, walking right: a tree drawn three times in
+// the shadow map, then four, the new one second - 900 - 1250 units from any copy of N-1), and its closest partner is
+// another copy's - which that copy, the same in both frames, matches exactly. Drawn there, its shadow showed where there
+// is none in the in-between images (and in Viridian the same, a copy 1250 units away). The test for another copy alone
+// (ip_draw_other_copy) is loose for coordinates in the thousands; this is not a matter of distance.
+static int ip_pair_cmp(const void *x, const void *y) {
+    const IpFrame *f = &ipf[ipc];
+    float a = f->pair_dist[*(const uint32_t *)x], b = f->pair_dist[*(const uint32_t *)y];
+    return a < b ? -1 : a > b;
+}
+static void ip_pair_all(void) {
+    IpFrame *f = &ipf[ipc], *fc = &ipf[IP_PREV];
+    f->paired = true;
+    if (f->paircap < f->ndr) {
+        f->paircap = f->ndr * 2;
+        f->pair = realloc(f->pair, f->paircap * sizeof *f->pair);
+        f->pair_dist = realloc(f->pair_dist, f->paircap * sizeof *f->pair_dist);
+    }
+    uint32_t *order = malloc((f->ndr + 1) * sizeof *order), no = 0;
+    for (uint32_t i = 0; i < f->ndr; i++) {
+        f->pair[i] = ip_pair_find(&f->dr[i], &f->pair_dist[i]);
+        if (f->pair[i] >= 0) order[no++] = i;
+    }
+    static int one = -1;  // (LARECOMP_INTERP_ONE_TO_ONE=0: comparison, a partner may serve several draws)
+    if (one < 0) one = getenv("LARECOMP_INTERP_ONE_TO_ONE") ? atoi(getenv("LARECOMP_INTERP_ONE_TO_ONE")) : 1;
+    if (one && no) {
+        qsort(order, no, sizeof *order, ip_pair_cmp);
+        uint8_t *taken = calloc(fc->ndr + 1, 1);
+        for (uint32_t j = 0; j < no; j++) {
+            uint32_t i = order[j];
+            if (taken[f->pair[i]]) { f->pair[i] = IP_PAIR_NONE; ip_stats_taken++; }
+            else taken[f->pair[i]] = 1;
+        }
+        free(taken);
+    }
+    free(order);
+}
+// This 3D draw's partner (the replay, before its cbufs)
+static void ip_pair_draw(void) {
+    IpFrame *f = &ipf[ipc], *fc = &ipf[IP_PREV];
+    const IpDraw *n = ip_draw_find(f, ip_draw_sig, ip_draw_occ);
+    if (!n) return;
+    if (!f->paired) ip_pair_all();
+    int32_t p = f->pair[n - f->dr];
+    if (p == IP_PAIR_ANY) return;
+    if (p == IP_PAIR_NONE) { ip_part_set = true, ip_part_sig = 0, ip_part_occ = ~0u; return; }
+    ip_part_set = true, ip_part_sig = fc->dr[p].sig, ip_part_occ = fc->dr[p].occ;
 }
 
 // LARECOMP_INTERP_KEPT_LOG's window: those presents' first in-between image
@@ -5654,9 +5715,10 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
             }
             if (mx > far) {
                 float x, y, z; memcpy(&x, &a[at], 4); memcpy(&y, &b[at], 4); memcpy(&z, &buf[at], 4);
-                LOG("[interp-far] present %llu t %.2f stage %d cbuf %d size %u occ %u%s: word %u N-1 %g N %g blended %g (%s)\n",
-                    (unsigned long long)renderer_present_count(), ip_t, stage, k, size, ip_draw_occ, ip_part_set ? " (by content)" : "",
-                    at, x, y, z, ip_sig_txt);
+                NvnTexture *t0 = st.rt.ncolor && st.rt.color[0] ? st.rt.color[0] : st.rt.depth;
+                LOG("[interp-far] present %llu t %.2f rt %u stage %d cbuf %d size %u occ %u%s: word %u N-1 %g N %g blended %g (%s)\n",
+                    (unsigned long long)renderer_present_count(), ip_t, t0 ? t0->width : 0, stage, k, size, ip_draw_occ,
+                    ip_part_set ? " (by content)" : "", at, x, y, z, ip_sig_txt);
             }
         }
     }
@@ -6084,9 +6146,9 @@ void vk_interp_replay(float t) {
             (unsigned long long)ip_stats_content, (unsigned long long)ip_stats[3]);
     if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu\n",
+        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu, partner taken %llu\n",
             (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged, (unsigned long long)ip_stats_vtx,
-            (unsigned long long)ip_stats_other_copy);
+            (unsigned long long)ip_stats_other_copy, (unsigned long long)ip_stats_taken);
 }
 
 // After the present's images: the next frame records into the other slot, from the state this one ended with
