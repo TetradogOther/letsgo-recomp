@@ -72,7 +72,7 @@ Most tested with *Eevee* 1.0.0; *Pikachu* 1.0.0 less.
    write to.
 2. Open **`LetsGoRecomp.exe`** (if Windows warns, **More info** → **Run anyway**).
 3. On the **Game** page, click **Select game folder...** and pick the folder with `exefs` and `romfs`.
-4. Wait while it copies the files and recompiles the game for your PC (only once, about 13 minutes on a 20-thread CPU).
+4. Wait while it copies the files and recompiles the game for your PC (only once: 22 minutes measured on a 20-thread CPU, longer with fewer threads).
 5. Click **Play**.
 
 Everything stays in that folder (settings, saves, mods). To update, unzip a new release over it. For both games, use

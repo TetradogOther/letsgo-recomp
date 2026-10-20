@@ -28,7 +28,7 @@ How to play
 3. Click "Select game folder..." and pick the folder with your extracted game (the one that holds exefs and romfs,
    or any folder above it).
 4. Wait while the game files are copied and the game code is recompiled for your PC. This happens only once and
-   takes a while (13 minutes measured on a 20-thread CPU, longer with fewer threads).
+   takes a while (22 minutes measured on a 20-thread CPU, longer with fewer threads).
 5. Click Play.
 
 Experimental options (start screen; version 1.0.0 of either game: greyed out for updated games)
