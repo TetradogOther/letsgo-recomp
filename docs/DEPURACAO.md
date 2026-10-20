@@ -34,7 +34,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SNAP=<quadro A>,<quadro B>` | copia as páginas não nulas do heap em A e, a cada 250 quadros a partir de B (30 vezes), lista os deltas pequenos mais comuns das palavras que cresceram (3 a 20 acertos) com endereços de exemplo; o ganho de XP de uma equipe é um delta compartilhado. O heap tem muito contador mudando, então o ruído é grande |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
-| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher com a seção "Teclado e mouse" aberta / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_TAB=<n>` | launcher aberto na aba n (0 Jogo, 1 Gráficos, 2 Imagem e som, 3 Controles, 4 Mods; com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher na aba "Controles" / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
 
 ## Travamentos e crashes
 | Ferramenta | Uso |
@@ -87,7 +88,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_WATCH_AT=<presente>`, `LARECOMP_WATCH_MAX=<n>`, `LARECOMP_WATCH_LIKE=<presente>:<endereço>` | o `LARECOMP_WATCH` só a partir daquele presente; só as n primeiras escritas; e todas as palavras dos heaps com o valor daquele endereço naquele presente vigiadas (a varredura roda no presente, na thread do jogo). As escritas de até 16 bytes que cobrem a palavra (vetores SIMD) agora contam |
 | `LARECOMP_FPS_AT=<present>:<fps>,...` | muda o limite de quadros (30/60/120) naqueles presents, como o menu F12 |
 | `LARECOMP_SET_AT="<present>:<chave>=<valor>;..."` | aplica uma linha do `larecomp.ini` naquele present, como o menu F12 muda uma opção com o jogo rodando (ex.: `1300:ssao_level=3;1400:aa=taa`; sem espaços, para caber numa variável) |
-| `LARECOMP_MENU_PAGE=cfg/adv` | com `LARECOMP_MENU_AT`: abre a página principal / avançada do menu F12 em vez do menu de pausa |
+| `LARECOMP_MENU_PAGE=cfg/adv/<n>` | com `LARECOMP_MENU_AT`: abre as configurações do F12 (em vez do menu de pausa) na aba n - cfg a primeira (Gráficos), adv a Avançado |
 | `LARECOMP_FG_ONLY_GENERATED=1` | a janela mostra só os quadros gerados (para vê-los: `tools/fg_walk.sh` captura a janela da área de trabalho em quadros dados, com o jogo em velocidade real) |
 | `LARECOMP_FG_NOFLIP=1` | (comparação) a geração de quadros recebe a profundidade e os vetores sem inverter em y, como antes da correção: fantasma enorme em movimento vertical |
 | `LARECOMP_FG_DEBUG=1` | a geração de quadros desenha as linhas de depuração do AMD (tearing e ritmo) |

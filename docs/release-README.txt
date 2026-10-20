@@ -31,25 +31,27 @@ How to play
    takes a while (13 minutes measured on a 20-thread CPU, longer with fewer threads).
 5. Click Play.
 
-Experimental options (start screen, off by default)
-(Version 1.0.0 of either game: greyed out for updated games.)
-- 60 fps: the overworld at 60 fps without speed-ups; menus and the Pokedex smoothed; battles and captures stay at 30.
-- Wild battles: touching a wild Pokemon starts a classic battle against it, then the capture.
-The controller stick dead zone is under "Keyboard and mouse".
+Experimental options (start screen; version 1.0.0 of either game: greyed out for updated games)
+- Frame rate limit (Graphics tab, also in the F12 menu): 30 (the game's), 60 or 120 fps - the overworld at that rate
+  without speed-ups; menus and the Pokedex smoothed; battles and captures stay at 30.
+- Wild battles (Game tab, off by default): touching a wild Pokemon starts a classic battle against it, then the capture.
+The controller stick dead zone is in the Controls tab.
 
 Both games: one folder holds one set-up game, so unzip this twice (e.g. LetsGoRecomp-Eevee and LetsGoRecomp-Pikachu)
 and set each one up with its game.
 
-Everything stays in this folder: settings (larecomp.ini), saves (save\, or save-pikachu\ for Pikachu), the game files (extracted\), translations
-(mods\) and the log (lasrecomp.log). To move or back up the game, move or copy the whole folder.
+Everything stays in this folder: settings (larecomp.ini), saves (save\, or save-pikachu\ for Pikachu), the game files (extracted\), mods and
+translations (mods\) and the log (lasrecomp.log). To move or back up the game, move or copy the whole folder.
 
-Translations
-------------
-Click "Install a translation..." on the start screen and pick the translation you downloaded (.zip, .rar or .7z, as
-it came; packs made for Atmosphere / LayeredFS work). Then choose it under "Translation".
+Translations and mods
+---------------------
+In the start screen's Mods tab, click "Install a mod..." and pick the file you downloaded (.zip, .rar or .7z, as it
+came; packs made for Atmosphere / LayeredFS work: translations, textures, models). Then choose it under "Active mod".
+Mods of the game's code (exefs, IPS patches, cheats) don't work in this port.
 
-Portugues (Brasil): para jogar em portugues, baixe a traducao PT-BR de fas do grupo Pokemon Switch Brasil, clique em
-"Instalar traducao..." e escolha o arquivo baixado (.rar ou .zip, do jeito que veio). Depois selecione-a em "Traducao".
+Portugues (Brasil): para jogar em portugues, baixe a traducao PT-BR de fas do grupo Pokemon Switch Brasil, abra a aba
+"Mods", clique em "Instalar mod..." e escolha o arquivo baixado (.rar ou .zip, do jeito que veio). Depois selecione-a
+em "Mod ativo".
 A traducao substitui os textos em ingles e espanhol: num jogo novo, escolha English ou Espanol na tela de idioma do
 jogo. O programa abre em portugues quando o Windows esta em portugues.
 

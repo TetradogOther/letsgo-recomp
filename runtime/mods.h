@@ -1,5 +1,6 @@
-// Mods: game files replaced or added from a folder, as Atmosphere's LayeredFS (fan translations come this way), and
-// the game's language. runtime/mods.c; the start screen (runtime/ui/launcher_lg.mm) picks both.
+// Mods: game files replaced or added from a folder, as Atmosphere's LayeredFS (fan translations, textures, models come
+// this way; mods of the game's code - exefs, IPS patches, cheats - can't apply to the recompiled code), and the game's
+// language. runtime/mods.c; the start screen's Mods tab (runtime/ui/launcher_lg.mm) picks the active one.
 //
 //   mods/<name>/romfs/...                                  the game's RomFS paths (bin/message/English/...)
 //   mods/<name>/atmosphere/contents/<title id>/romfs/...   (or any folder holding a romfs/ up to 4 levels down:
@@ -15,6 +16,8 @@ extern "C" {
 #define MODS_MAX 32
 // The folders under mods/ that hold a romfs/: names[i] (up to MODS_MAX). Returns how many.
 int mods_list(char names[][128], int max);
+// The mods/ folder, made if missing, as an absolute path (the start screen opens it)
+const char *mods_dir_abs(void);
 // The active mod's romfs/ folder (g_settings.mod), or NULL.
 const char *mod_romfs_dir(void);
 // path: a RomFS path ("bin/message/English/..."). True with the host file when the active mod replaces it.

@@ -4,6 +4,20 @@
 
 Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16).
 
+- **Start screen and F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the window)
+  and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen has tabs - Game,
+  Graphics, Image and sound, Controls, Mods - with Play always below them, and now has the graphics settings too; the
+  F12 menu has Graphics, Image and sound, Advanced. L / R on a controller change the tab.
+- **One frame rate setting**: the start screen's "60 fps" box is gone; the Graphics tab's frame rate limit (30 / 60 /
+  120) is the same row as the F12 menu's.
+- **Translation is now Mods**: any mod that replaces the game's files (Atmosphere LayeredFS: translations, textures,
+  models) installs and is picked in the Mods tab, one at a time; **Open the mods folder** shows where to copy one by
+  hand, and the list follows when you come back. Mods of the game's code (exefs, IPS, cheats) can't apply to the
+  recompiled game, and the tab says so. `larecomp.ini` keeps `mod = <name>`.
+- The walking fix at 60 / 120 fps hooks the movement and turning functions by the per-build address table (both
+  games' addresses checked with tools/addrmap.py) instead of looking for their code near Pikachu's; the 60 fps
+  research tools moved to `runtime/hle/fps60_research.c`.
+
 - **Fixes SSAO and GI flickering as the camera moves** (rocks, bushes and characters going in and out of the effect):
   they went onto the scene at its first blended draw after 16 opaque ones, and Let's Go draws blended ones among its
   opaque ones - whatever came after got neither, and that line moved with the view (34 to 68 of about 130 opaque

@@ -13,6 +13,7 @@
 
 #include "gamesetup.h"
 #include "hle.h"
+#include "paths.h"
 #include "platform.h"
 #include "romfs_build.h"
 #include "settings.h"
@@ -61,6 +62,13 @@ int mods_list(char names[][128], int max) {
     }
     closedir(d);
     return n;
+}
+
+const char *mods_dir_abs(void) {
+    static char p[1100];
+    mkdir("mods", 0755);
+    snprintf(p, sizeof p, "%s/mods", rt_data_root());
+    return p;
 }
 
 static const char *romfs_of(const char *name) {

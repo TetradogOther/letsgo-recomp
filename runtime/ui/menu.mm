@@ -1,7 +1,7 @@
 // In-game overlay (Dear ImGui on the Vulkan renderer; input fed from SDL events): the "close the game?" question
-// (Esc, F1 or Minus + Plus on a controller), the F12 settings (volume, brightness, contrast, saturation), the name entry the game asks for (runtime/hle/swkbd.c), the FPS counter
-// and the controller's finger on the touch screen (runtime/hle/input.c). Everything else is set on the start screen
-// (runtime/ui/launcher_lg.mm).
+// (Esc, F1 or Minus + Plus on a controller), the F12 settings (tabs: graphics, image and sound, advanced - the same
+// pages as the start screen's, runtime/ui/settings_ui.mm), the name entry the game asks for (runtime/hle/swkbd.c), the
+// FPS counter and the controller's finger on the touch screen (runtime/hle/input.c).
 // LARECOMP_MENU_KEY=<SDL scancode name> ("F10", "Insert"...): another key for the F12 settings (Steam takes F12 for
 // screenshots by default).
 //
@@ -16,6 +16,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "osk.h"
+#include "settings_ui.h"
 extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.cpp
 
 extern "C" {
@@ -24,27 +25,18 @@ extern "C" {
 #include "menu.h"
 #include "../paths.h"
 void input_reset(void);
+uint64_t rt_addr(uint64_t eevee);  // runtime/fnhook.c (0: a build without the tables the frame rate modes need)
 bool input_finger_cursor(float *x, float *y, bool *down);  // runtime/hle/input.c
 }
 
 // ------------------------------------------------------------------ language
-// The overlay speaks English, Portuguese or Russian (issue #1), from the system's language; LARECOMP_LANG=en|pt|ru
-// chooses. The launcher has its own strings (runtime/ui/launcher_lg.mm).
-static int g_mlang;  // 0 English, 1 Portuguese, 2 Russian
-static void pick_menu_language(void) {
-    const char *e = getenv("LARECOMP_LANG"), *lang = e && *e ? e : "";
-    SDL_Locale **l = NULL;
-    int n = 0;
-    if (!*lang && (l = SDL_GetPreferredLocales(&n)) && n > 0 && l[0]->language) lang = l[0]->language;
-    g_mlang = !strncmp(lang, "pt", 2) ? 1 : !strncmp(lang, "ru", 2) ? 2 : 0;
-    SDL_free(l);
-}
-#define M(en, pt, ru) (g_mlang == 2 ? (ru) : g_mlang == 1 ? (pt) : (en))
+// English, Portuguese or Russian (issue #1), from the system's language (runtime/ui/settings_ui.h)
+#define M UI_T
 
 // ------------------------------------------------------------------ state shared with the main thread
 static std::atomic<bool> g_open{false};  // the "close the game?" question is up
 static std::atomic<bool> g_cfg{false};   // the F12 settings are up
-static int g_cfg_page;                   // 0 the settings, 1 the advanced ones (render thread)
+static int g_cfg_tab;                    // the F12 settings' tab: graphics, image and sound, advanced (render thread)
 static std::atomic<bool> g_want_fullscreen_apply{false};
 
 struct QEvent {
@@ -76,15 +68,16 @@ static void set_cfg(bool open) {
     if (open == g_cfg.load()) return;
     if (open) set_open(false);
     g_cfg.store(open);
-    if (!open) g_cfg_page = 0;
     input_reset();
     if (!open) settings_save();
 }
-// (LARECOMP_MENU_AT: runtime/nvn/vulkan/device.c; LARECOMP_MENU_PAGE=cfg / adv: the F12 menu's main / advanced page instead)
+// (LARECOMP_MENU_AT: runtime/nvn/vulkan/device.c; LARECOMP_MENU_PAGE=cfg / adv / <tab number>: the F12 settings on that
+// tab instead - cfg the first, adv the advanced one)
 extern "C" void menu_test_open(void) {
     const char *pg = getenv("LARECOMP_MENU_PAGE");
     if (!pg) { set_open(true); return; }
-    g_cfg_page = !strcmp(pg, "adv");
+    g_cfg_tab = !strcmp(pg, "adv") ? 2 : atoi(pg);
+    ui_tab_select(g_cfg_tab);
     set_cfg(true);
 }
 
@@ -283,55 +276,18 @@ static ImGuiContext *g_ctx;  // ours: the start screen has its own context
 static ImFont *g_font, *g_font_big;  // the FPS counter and the name entry
 static ImFont *g_menu_font;          // the "close the game?" question (Baloo 2, as on the start screen)
 
-static void style_init(void) {
-    ImGuiStyle &s = ImGui::GetStyle();
-    ImGui::StyleColorsDark();
-    s.WindowRounding = 14; s.FrameRounding = 8; s.GrabRounding = 8;
-    s.WindowPadding = ImVec2(28, 24); s.FramePadding = ImVec2(14, 8); s.ItemSpacing = ImVec2(14, 12);
-    s.WindowBorderSize = 0;
-    ImVec4 *c = s.Colors;
-    ImVec4 gold(0.93f, 0.76f, 0.33f, 1), green(0.15f, 0.36f, 0.25f, 1);
-    c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.09f, 0.08f, 0.94f);
-    c[ImGuiCol_PopupBg] = ImVec4(0.07f, 0.10f, 0.09f, 0.98f);
-    c[ImGuiCol_Text] = ImVec4(0.96f, 0.94f, 0.88f, 1);
-    c[ImGuiCol_TextDisabled] = ImVec4(0.62f, 0.64f, 0.58f, 1);
-    c[ImGuiCol_FrameBg] = ImVec4(0.13f, 0.19f, 0.16f, 1);
-    c[ImGuiCol_FrameBgHovered] = green;
-    c[ImGuiCol_FrameBgActive] = ImVec4(0.19f, 0.45f, 0.31f, 1);
-    c[ImGuiCol_Button] = ImVec4(0.14f, 0.22f, 0.18f, 1);
-    c[ImGuiCol_ButtonHovered] = green;
-    c[ImGuiCol_ButtonActive] = ImVec4(0.21f, 0.50f, 0.34f, 1);
-    c[ImGuiCol_NavCursor] = gold;
-}
-
 static void init(void) {
     IMGUI_CHECKVERSION();
-    pick_menu_language();
+    ui_pick_language();
     g_ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(g_ctx);
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.IniFilename = NULL;
-    ImFontConfig cfg;
-    cfg.OversampleH = 2;
-    static const ImWchar ranges[] = {0x20, 0xFF, 0x400, 0x45F, 0};  // (Latin-1: Portuguese accents; Cyrillic)
-    const char *paths[] = {"C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                           "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"};
-    for (const char *p : paths) {
-        if (FILE *f = fopen(p, "rb")) fclose(f);  // a missing file is an assertion in ImGui, not a NULL return
-        else continue;
-        g_font = io.Fonts->AddFontFromFileTTF(p, 34, &cfg, ranges);
-        g_font_big = io.Fonts->AddFontFromFileTTF(p, 56, &cfg, ranges);
-        break;
-    }
-    char baloo[1024];
-    if (rt_resource("Baloo2-SemiBold.ttf", "third_party/fonts/Baloo2/Baloo2-SemiBold.ttf", baloo, sizeof baloo))
-        g_menu_font = io.Fonts->AddFontFromFileTTF(baloo, 39, &cfg, ranges);
-    if (!g_font) g_font = io.Fonts->AddFontDefault();
-    if (!g_font_big) g_font_big = g_font;
-    if (!g_menu_font) g_menu_font = g_font;
-    style_init();
+    UiFonts f = ui_load_fonts();
+    g_font = f.body, g_font_big = f.big, g_menu_font = f.title;
+    ui_style();
     vk_imgui_backend_init();
     g_inited = true;
 }
@@ -426,7 +382,7 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::Begin("##quit", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                      ImGuiWindowFlags_AlwaysAutoResize);
-    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);  // (Baloo has no Cyrillic: Segoe UI for Russian)
+    ImGui::PushFont(g_menu_font);  // (Baloo 2; Segoe UI for Russian: ui_load_fonts)
     ImGui::TextUnformatted(M("Close the game?", "Deseja fechar o jogo?", "Закрыть игру?"));
     ImGui::TextDisabled("%s", M("Progress since the last save will be lost.", "O progresso desde o último save será perdido.",
                                 "Прогресс после последнего сохранения будет потерян."));
@@ -453,197 +409,40 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::End();
 }
 
-// F12: volume and the game image's colour, applied live (runtime/services/audio.c apply_gain, runtime/nvn/vulkan/exec.c
-// post_process); saved to larecomp.ini on closing. B / Esc / F12 close.
-// A label and the slider beside it, the sliders lined up at x (the widest label of the page)
-static bool cfg_row(const char *label, float x) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine(x);
-    ImGui::SetNextItemWidth(-1);
-    return true;
-}
-static float cfg_label_x(const char *const *labels, int n) {
-    float w = 0;
-    for (int i = 0; i < n; i++) w = fmaxf(w, ImGui::CalcTextSize(labels[i]).x);
-    return w + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;
-}
-
-extern "C" bool vk_fg_available(void);  // (runtime/nvn/vulkan/device.c: AMD's swapchain can be made)
-
-// Advanced settings (the "Advanced..." button): the image's colour, TAA / FSR 3.1 sharpness, the motion vectors and
-// the debug views (SSAO and GI have quality levels on the main page instead of parameters: settings_apply_levels)
-static void cfg_advanced(float scale, bool *close) {
-    const char *l_bri = M("Brightness", "Brilho", "Яркость"), *l_con = M("Contrast", "Contraste", "Контраст"),
-               *l_sat = M("Saturation", "Saturação", "Насыщенность"), *l_shp = M("Sharpness", "Nitidez", "Резкость");
-    const char *labels[] = {l_bri, l_con, l_sat, l_shp};
-    float x = cfg_label_x(labels, 4);
-    // the image's colour (runtime/nvn/vulkan/exec.c post_process, color.frag)
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Image", "Imagem", "Изображение"));
-    {
-        struct Row { const char *label; float *v, lo, hi; } rows[] = {
-            {l_bri, &g_settings.brightness, 0.5f, 1.5f}, {l_con, &g_settings.contrast, 0.5f, 1.5f}, {l_sat, &g_settings.saturation, 0.0f, 2.0f}};
-        for (int i = 0; i < 3; i++) {
-            float pct = *rows[i].v * 100;
-            cfg_row(rows[i].label, x);
-            ImGui::PushID(100 + i);
-            if (ImGui::SliderFloat("##c", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *rows[i].v = pct / 100;
-            ImGui::PopID();
-            if (!i) ImGui::SetItemDefaultFocus();
-        }
-    }
-    // TAA and the motion vectors (runtime/nvn/vulkan/exec.c taa_run, mv_run; per object: maxwell/translate.c velocity)
-    ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Temporal (TAA / FSR 3.1)", "Temporal (TAA / FSR 3.1)", "Временное (TAA / FSR 3.1)"));
-    ImGui::BeginDisabled(g_settings.antialias != AA_TAA && g_settings.antialias != AA_FSR3);  // (FSR 3.1's sharpening too)
-    {
-        float pct = g_settings.taa_sharpness * 100;
-        cfg_row(l_shp, x);
-        if (ImGui::SliderFloat("##taa_s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.taa_sharpness = pct / 100;
-    }
-    ImGui::EndDisabled();
-    ImGui::Checkbox(M("Per-object motion vectors", "Vetores de movimento por objeto", "Векторы движения объектов"), &g_settings.mv_objects);
-    // debug views (shown at the present instead of the game image: exec.c post_process)
-    ImGui::Separator();
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Debug", "Depuração", "Отладка"));
-    ImGui::BeginDisabled(!g_settings.ssao);
-    ImGui::Checkbox(M("Occlusion alone", "Só a oclusão", "Только затенение"), &g_settings.ssao_debug);
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!g_settings.gi);
-    ImGui::Checkbox(M("Indirect light alone", "Só a luz indireta", "Только непрямой свет"), &g_settings.gi_debug);
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::Checkbox(M("Motion vectors", "Vetores de movimento", "Векторы движения"), &g_settings.mv_debug);
-    settings_clamp_color();
-    ImGui::Spacing();
-    float bw = 240 * scale;
-    if (ImGui::Button(M("Back", "Voltar", "Назад"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
-        g_cfg_page = 0;
-    ImGui::SameLine();
-    if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) {
-        g_settings.ssao_debug = g_settings.gi_debug = g_settings.mv_debug = false;
-        g_settings.taa_sharpness = 0.5f, g_settings.mv_objects = true;
-        g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
-    }
-    ImGui::SameLine();
-    *close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0));
-}
-
+// F12: the settings, applied live (runtime/ui/settings_ui.mm: the start screen's pages); saved to larecomp.ini on closing.
+// B / Esc / F12 close; L / R on a controller change the tab.
 static void cfg_draw(ImGuiIO &io, float scale) {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    float ww = fminf(io.DisplaySize.x * 0.9f, 900 * scale);
-    ImGui::SetNextWindowSize(ImVec2(ww, 0), ImGuiCond_Always);
-    // (taller than the screen - the advanced page at 720p: it scrolls, and keyboard / pad navigation follows the focus)
-    ImGui::SetNextWindowSizeConstraints(ImVec2(ww, 0), ImVec2(ww, io.DisplaySize.y * 0.92f));
-    // (one window per page: a page appearing gets its default focus)
-    ImGui::Begin(g_cfg_page ? "##cfg_adv" : "##cfg", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                                                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    // (fixed width, height fitted: the sliders fill the line, which an auto-resized window cannot have)
-    ImGui::PushFont(g_mlang == 2 ? g_font : g_menu_font);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", g_cfg_page ? M("Advanced settings", "Configurações avançadas", "Дополнительно")
-                                                                       : M("Settings", "Configurações", "Настройки"));
-    ImGui::PopFont();
-    bool close = false;
-    if (g_cfg_page) {
-        cfg_advanced(scale, &close);
-    } else {
-        const char *labels[] = {M("Volume", "Volume", "Громкость"), M("Shadow filter", "Filtro das sombras", "Фильтр теней"),
-                                M("Anti-aliasing", "Antisserrilhado", "Сглаживание"), M("Frame generation", "Geração de quadros", "Генерация кадров"),
-                                M("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1"),
-                                M("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)"),
-                                M("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)"),
-                                M("Frame rate limit", "Limite de quadros", "Лимит кадров"), M("Upscaler", "Escalonador", "Масштабирование")};
-        float x = cfg_label_x(labels, 9);
-        {
-            float pct = g_settings.volume * 100;
-            cfg_row(labels[0], x);
-            if (ImGui::SliderFloat("##vol", &pct, 0, 200, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.volume = pct / 100;
-            ImGui::SetItemDefaultFocus();  // (d-pad / arrows pick a row; A / Enter, then left-right, changes it)
+    // one size for every tab, as the start screen's window (a page taller than it scrolls; pad navigation follows)
+    float ww = fminf(io.DisplaySize.x * 0.9f, 1000 * scale), wh = fminf(io.DisplaySize.y * 0.92f, 780 * scale);
+    ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
+    ImGui::Begin("##cfg", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    ui_title(g_menu_font, M("Settings", "Configurações", "Настройки"));
+    bool known = rt_addr(0x70002f8bb0ull) != 0;
+    float footer = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2 + ImGui::GetStyle().WindowPadding.y * 0.5f;
+    ui_tabs_begin(&g_cfg_tab, 3);
+    if (ImGui::BeginTabBar("##cfg_tabs")) {
+        const char *names[] = {M("Graphics", "Gráficos", "Графика"), M("Image and sound", "Imagem e som", "Изображение и звук"),
+                               M("Advanced", "Avançado", "Дополнительно")};
+        for (int t = 0; t < 3; t++) {
+            if (!ui_tab(names[t], t, &g_cfg_tab)) continue;
+            ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
+            if (t == 0) ui_page_graphics(ui_graphics_x(NULL, 0), known);
+            else if (t == 1) ui_page_image_sound();
+            else ui_page_advanced();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
         }
-        // the world's frame rate (runtime/hle/fps60.c, switched at the next present): the game's 30, 60, or 120 (more
-        // experimental); menus stay at 30 with an in-between image (60), battles and captures at 30
-        {
-            const char *fr[] = {M("30 fps (original)", "30 fps (original)", "30 fps (оригинал)"), "60 fps",
-                                M("120 fps (experimental)", "120 fps (experimental)", "120 fps (экспериментально)")};
-            int f = g_settings.fps == 120 ? 2 : g_settings.fps == 60 ? 1 : 0;
-            cfg_row(labels[7], x);
-            if (ImGui::Combo("##fps", &f, fr, 3)) g_settings.fps = f == 2 ? 120 : f == 1 ? 60 : 30;
-        }
-        ImGui::Separator();
-        // SSAO and GI by quality level (their parameters: settings_apply_levels; high = what they had before the levels)
-        const char *lv[] = {M("Off", "Desligado", "Выкл."), M("Low", "Baixo", "Низкое"), M("Medium", "Médio", "Среднее"),
-                            M("High", "Alto", "Высокое")};
-        cfg_row(labels[5], x);
-        ImGui::Combo("##ssao_lv", &g_settings.ssao_level, lv, 4);
-        cfg_row(labels[6], x);
-        ImGui::Combo("##gi_lv", &g_settings.gi_level, lv, 4);
-        // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
-        const char *names[] = {M("Game's", "Do jogo", "Как в игре"), M("Bilinear", "Bilinear", "Билинейный"),
-                               M("Smooth", "Suave", "Мягкий")};
-        cfg_row(labels[1], x);
-        ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, names, 3);
-        // anti-aliasing: SMAA on the final image (the interface too), or TAA on the scene (jittered, motion vectors:
-        // runtime/nvn/vulkan/exec.c taa_run)
-        // FSR 3.1 last: temporal (jittered scene, motion vectors, the interface masked: exec.c, fsr3.cpp), it anti-aliases
-        // and upscales a lower render resolution (its mode, below). Otherwise the upscaler picked below: FSR 1 or bilinear.
-        // The upscaler row offers FSR 3.1 too (where it was before it became an anti-aliasing): the same choice, the two
-        // rows follow each other; leaving FSR 3.1 there brings back the anti-aliasing it replaced.
-        static int last_aa = AA_SMAA;
-        if (g_settings.antialias != AA_FSR3) last_aa = g_settings.antialias;
-        const char *aa[] = {M("Off", "Desligado", "Выкл."), "SMAA", "TAA", "FSR 3.1"};
-        cfg_row(labels[2], x);
-        if (ImGui::Combo("##aa", &g_settings.antialias, aa, 4)) settings_apply_levels();
-        {   // (a render resolution below the window's: FSR 3.1's mode, or the start screen's)
-            const char *up[] = {M("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
-            int u = g_settings.antialias == AA_FSR3 ? 2 : g_settings.upscaler_pick == UPSCALE_BILINEAR ? 0 : 1;
-            cfg_row(labels[8], x);
-            if (ImGui::Combo("##up", &u, up, 3)) {
-                if (u == 2) g_settings.antialias = AA_FSR3;
-                else {
-                    g_settings.upscaler_pick = u ? UPSCALE_SHARP : UPSCALE_BILINEAR;
-                    if (g_settings.antialias == AA_FSR3) g_settings.antialias = last_aa;
-                }
-                settings_apply_levels();
-            }
-        }
-        // FSR 3.1's presets: the render resolution is the window's divided by the ratio (runtime/nvn/output_scale.c)
-        if (g_settings.antialias == AA_FSR3) {
-            const char *pr[] = {M("Native AA (1.0x)", "AA nativo (1,0x)", "Нативное AA (1,0x)"),
-                                M("Quality (1.5x)", "Qualidade (1,5x)", "Качество (1,5x)"),
-                                M("Balanced (1.7x)", "Equilibrado (1,7x)", "Баланс (1,7x)"),
-                                M("Performance (2.0x)", "Desempenho (2,0x)", "Производительность (2,0x)"),
-                                M("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
-            cfg_row(labels[4], x);
-            ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
-        }
-        // FSR 3.1 frame generation (exec.c vk_fg_present; AMD's swapchain is switched to at the next frame: device.c). FSR
-        // 3.1 makes one frame between two (several is FSR 4's, which has no Vulkan version): off or 2x.
-        {
-            bool can = g_settings.antialias == AA_FSR3 && vk_fg_available();
-            const char *fg[] = {M("Off", "Desligado", "Выкл."), "2x"};
-            int cur = can && g_settings.frame_gen == 2 ? 1 : 0;
-            cfg_row(labels[3], x);
-            ImGui::BeginDisabled(!can);
-            if (ImGui::Combo("##fg", &cur, fg, 2)) g_settings.frame_gen = cur ? 2 : 0;
-            ImGui::EndDisabled();
-            if (!can) ImGui::SetItemTooltip("%s", vk_fg_available() ? M("With FSR 3.1 anti-aliasing", "Com o antisserrilhado FSR 3.1",
-                                                                        "Со сглаживанием FSR 3.1")
-                                                                    : M("amd_fidelityfx_vk.dll is missing", "Falta amd_fidelityfx_vk.dll",
-                                                                        "Нет amd_fidelityfx_vk.dll"));
-        }
-        settings_apply_levels();
-        settings_clamp_color();
-        ImGui::Spacing();
-        float bw = 240 * scale;
-        if (ImGui::Button(M("Advanced...", "Avançado...", "Дополнительно..."), ImVec2(bw, 0))) g_cfg_page = 1;
-        ImGui::SameLine();
-        if (ImGui::Button(M("Reset", "Restaurar", "Сбросить"), ImVec2(bw, 0))) g_settings.volume = 1.0f;
-        ImGui::SameLine();
-        close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+        ImGui::EndTabBar();
     }
-    ImGui::TextDisabled("%s", M("F12 or Esc closes", "F12 ou Esc fecha", "F12 или Esc — закрыть"));
+    ImGui::Separator();
+    bool close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(240 * scale, 0)) ||
+                 (!ImGui::IsPopupOpen(NULL, ImGuiPopupFlags_AnyPopupId) && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", M("F12 or Esc closes; L / R change the tab", "F12 ou Esc fecha; L / R trocam de aba", "F12 или Esc — закрыть; L / R — вкладки"));
     ImGui::End();
     if (close) set_cfg(false);
 }
@@ -667,17 +466,8 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     last = now;
     drain_events(io);
     // fonts are built for a ~1080 px tall output; scale to the window (spacing / rounding too)
-    float scale = (float)(target_h / 1080.0);
-    if (scale < 0.45f) scale = 0.45f;
-    io.FontGlobalScale = scale;
-    static ImGuiStyle base;
-    static float style_scale = -1;
-    if (style_scale < 0) base = ImGui::GetStyle();
-    if (fabsf(style_scale - scale) > 0.01f) {
-        ImGui::GetStyle() = base;
-        ImGui::GetStyle().ScaleAllSizes(scale);
-        style_scale = scale;
-    }
+    static UiScaler scaler;
+    float scale = ui_scale(scaler, (float)target_h);
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 

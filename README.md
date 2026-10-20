@@ -163,22 +163,25 @@ The game runs in handheld mode (one player).
 | Close the game | Esc | | − and + together |
 
 While you aim a Poké Ball the mouse is captured by the window; outside of aiming it is free. Mouse sensitivity is
-set in the launcher.
+set in the launcher (Controls tab).
 
 ## Translations and mods
 
-The game has no Portuguese (or any other fan) translation of its own; fan translations are distributed as
-Atmosphere LayeredFS packs, and those work as they are:
+Mods that replace the game's files - Atmosphere LayeredFS packs: fan translations, textures, models - work as they
+are, one at a time, from the launcher's **Mods** tab. Mods of the game's code (exefs, IPS patches, cheats) can't
+apply to a recompiled game. The game has no Portuguese (or any other fan) translation of its own; fan translations
+come this way:
 
-1. Click **Install a translation...** in the launcher.
+1. In the **Mods** tab, click **Install a mod...**.
 2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
    `romfs` folder for the game you set up (by its title id) inside it. Packs made for both games are fine.
-3. Choose it under **Translation**. "None (English)" goes back to the original game.
+3. Choose it under **Active mod**. "None" goes back to the original game.
 4. A translation replaces the texts of one or more of the game's languages, so the game has to be in one of them.
    The Brazilian Portuguese pack replaces English and Spanish: pick English or Español on the game's language screen
    when starting a new game, or use a save made in one of those.
 
-Installed mods live in `mods\<name>\romfs\`; you can also copy a `romfs` folder there by hand. Files in it replace
+Installed mods live in `mods\<name>\romfs\` (**Open the mods folder** opens it); you can also copy a mod's folder
+there by hand, with its `romfs` inside. Files in it replace
 the game's files with the same path, and new files are added.
 
 Tested with the Brazilian Portuguese fan translation by **Pokémon Switch Brasil** (see [Português](#português)).
@@ -394,10 +397,10 @@ protegeu o computador" (o exe não tem assinatura digital), clique em **Mais inf
 recompila o código do jogo para o seu PC (só uma vez; uns 13 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
 abre em português quando o Windows está em português.
 
-**Opções experimentais** (no launcher, desligadas por padrão): **60 fps** (o mundo a 60 fps de verdade, sem acelerar;
-menus e Pokédex suavizados; batalhas e capturas continuam a 30) e **Batalhas selvagens** (encostar num Pokémon
-selvagem começa uma batalha clássica contra ele e, depois, a captura). A **zona morta do analógico** do controle
-fica em "Teclado e mouse".
+**Opções experimentais** (no launcher): o **Limite de quadros** na aba Gráficos, também no menu F12 (30, 60 ou
+120 fps: o mundo nessa taxa de verdade, sem acelerar; menus e Pokédex suavizados; batalhas e capturas continuam a 30),
+e **Batalhas selvagens** na aba Jogo, desligada por padrão (encostar num Pokémon selvagem começa uma batalha clássica
+contra ele e, depois, a captura). A **zona morta do analógico** do controle fica na aba "Controles".
 
 ### Jogar em português (tradução PT-BR)
 
@@ -405,11 +408,11 @@ O jogo não tem português. A tradução de fãs do grupo **Pokémon Switch Bras
 
 1. Baixe a tradução PT-BR do Let's Go no canal oficial do grupo Pokémon Switch Brasil (o arquivo `.rar` ou `.zip`,
    do jeito que vier).
-2. No launcher, clique em **Instalar tradução...** e escolha o arquivo baixado. Não precisa descompactar: o
+2. No launcher, na aba **Mods**, clique em **Instalar mod...** e escolha o arquivo baixado. Não precisa descompactar: o
    programa abre o arquivo e acha sozinho a pasta do Let's Go Eevee (`0100187003A36000`), mesmo em pacotes que
    trazem os dois jogos.
-3. Em **Tradução**, escolha a tradução instalada e clique em **Jogar**. Para voltar ao inglês, escolha
-   "Nenhuma (inglês)".
+3. Em **Mod ativo**, escolha a tradução instalada e clique em **Jogar**. Para voltar ao inglês, escolha
+   "Nenhum (o jogo original)".
 4. A tradução PT-BR substitui os textos em inglês e em espanhol. Num jogo novo, escolha **English** ou **Español** na
    tela de idioma do próprio jogo (ela avisa que não dá para trocar depois); um save que já está em um desses dois
    idiomas também aparece em português.

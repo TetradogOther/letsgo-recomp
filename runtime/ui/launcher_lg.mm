@@ -1,14 +1,18 @@
-// Let's Go Recomp start screen: the game files (picked once, set up and recompiled here: runtime/gamesetup.c), the
-// resolution, fullscreen, anti-aliasing, the translation (mods/, installed from a downloaded file: runtime/mods.c),
-// the keyboard / mouse controls, Play. In English, or in Portuguese when the system's language is (LARECOMP_LANG=en|pt
-// chooses). The choices go to larecomp.ini (settings.c; bind_key_* from runtime/hle/bindings.c).
+// Let's Go Recomp start screen, in tabs: Game (the game files - picked once, set up and recompiled here:
+// runtime/gamesetup.c - and the game options), Graphics (the window, then the F12 menu's graphics page:
+// runtime/ui/settings_ui.mm), Image and sound (the same as the F12 menu's), Controls (keyboard / mouse) and Mods
+// (mods/: game files replaced, a translation for one; installed from a downloaded file: runtime/mods.c); Play below
+// them. The look is the F12 menu's. In English, or in Portuguese when the system's language is (LARECOMP_LANG=en|pt
+// chooses; the shared pages speak Russian too). The choices go to larecomp.ini (settings.c; bind_key_* from
+// runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
-// LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
-// from that folder at once; LARECOMP_MOD_INSTALL=<file or folder> installs a translation at once;
-// LARECOMP_LAUNCHER_KEYS=1 opens the keyboard section, =<slot> also waits for a new key for that input
+// LARECOMP_LAUNCHER_TAB=<n> opens that tab; LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
+// from that folder at once; LARECOMP_MOD_INSTALL=<file or folder> installs a mod at once;
+// LARECOMP_LAUNCHER_KEYS=1 opens the Controls tab, =<slot> also waits for a new key for that input
 // (runtime/input_bind.h BIND_*), and <slot>:<key name> presses that key for it.
 #include <SDL3/SDL.h>
 #include <float.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +20,7 @@
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_sdl3.h"
+#include "settings_ui.h"
 
 extern "C" {
 #include "gamesetup.h"
@@ -36,16 +41,10 @@ void vk_imgui_backend_shutdown(void);
 }
 
 // ------------------------------------------------------------------ language
+// (runtime/ui/settings_ui.h picks it; this screen's own strings are English or Portuguese)
 static bool g_pt;
-static void pick_language(void) {
-    const char *e = getenv("LARECOMP_LANG");
-    if (e && *e) { g_pt = !strncmp(e, "pt", 2); return; }
-    int n = 0;
-    SDL_Locale **l = SDL_GetPreferredLocales(&n);
-    g_pt = l && n > 0 && l[0]->language && !strcmp(l[0]->language, "pt");
-    SDL_free(l);
-}
 #define T(en, pt) (g_pt ? (pt) : (en))
+static float g_scale = 1;  // the window's height over 1080 (ui_scale): fixed sizes below are for 1080 px
 
 // ------------------------------------------------------------------ keyboard
 // The game's actions with the key bound to each. Click one, then press the new key (Esc or 5 s cancels; a key already
@@ -79,7 +78,8 @@ static void keys_section(void) {
     bind_capture_active(&cap_dev, &cap_slot, &ms_left);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2));
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 1));
-    if (ImGui::BeginTable("##keys", 4, ImGuiTableFlags_SizingFixedFit)) {
+    if (ImGui::BeginTable("##keys", 4, ImGuiTableFlags_SizingStretchProp)) {
+        for (int c = 0; c < 4; c++) ImGui::TableSetupColumn(NULL, c & 1 ? ImGuiTableColumnFlags_WidthStretch : ImGuiTableColumnFlags_WidthFixed);
         for (size_t i = 0; i < sizeof k_actions / sizeof k_actions[0]; i++) {
             int slot = k_actions[i].slot;
             ImGui::TableNextColumn();
@@ -93,7 +93,7 @@ static void keys_section(void) {
             int pushed = 0;
             if (waiting) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.42f, 0.12f, 1)); pushed++; }
             if (!bind_is_default_slot(BIND_DEV_KEY, slot)) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.82f, 0.38f, 1)); pushed++; }
-            if (ImGui::Button(lbl, ImVec2(230, 0))) {
+            if (ImGui::Button(lbl, ImVec2(-FLT_MIN, 0))) {
                 if (waiting) bind_capture_cancel();
                 else bind_capture_begin(BIND_DEV_KEY, slot);
             }
@@ -110,16 +110,18 @@ static void keys_section(void) {
                              "Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar."));
     ImGui::TextUnformatted(T("Otherwise: left = touch screen (Play with your partner). Right = B.",
                              "Fora dela: esquerdo = tocar na tela (Brincar com o parceiro). Direito = B."));
-    ImGui::PushItemWidth(420);
-    ImGui::SliderFloat(T("Mouse sensitivity", "Sensibilidade do mouse"), &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
-    ImGui::SliderFloat(T("Controller stick dead zone", "Zona morta do analógico"), &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
-    ImGui::PopItemWidth();
+    const char *sl[] = {T("Mouse sensitivity", "Sensibilidade do mouse"), T("Controller stick dead zone", "Zona morta do analógico")};
+    float x = ui_label_x(sl, 2);
+    ui_row(sl[0], x);
+    ImGui::SliderFloat("##mouse", &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
+    ui_row(sl[1], x);
+    ImGui::SliderFloat("##dead", &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
 }
 
 // ------------------------------------------------------------------ the interface at 2x (runtime/ui2x.c)
 // Made once from the player's own game files on request (the upscaler is downloaded then); used when made and on.
 static void ui2x_section(bool ready, bool *on) {
-    ImGui::SeparatorText(T("Sharper interface", "Interface mais nítida"));
+    ui_heading(T("Sharper interface", "Interface mais nítida"));
     int n = ui2x_running() ? 0 : ui2x_count();
     int st = ui2x_state();
     if (ui2x_running()) {
@@ -182,10 +184,10 @@ static bool take(char *slot, char *out, size_t n) {
 }
 
 // ------------------------------------------------------------------ the game files section
-static const ImVec4 k_green(0.45f, 0.85f, 0.50f, 1), k_red(1.0f, 0.45f, 0.40f, 1);
+static const ImVec4 &k_green = UI_GREEN_TEXT, &k_red = UI_RED_TEXT;
 
 static void game_files_section(SDL_Window *win) {
-    ImGui::SeparatorText(T("Game files", "Arquivos do jogo"));
+    ui_heading(T("Game files", "Arquivos do jogo"));
     int st = setup_state();
     if (setup_running()) {
         static const char *const en[] = {"", "Looking for the game files...", "Copying the game files...",
@@ -226,7 +228,7 @@ static void game_files_section(SDL_Window *win) {
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
     } else {
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 900);
+        ImGui::PushTextWrapPos(0);
         ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
                                  "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs)."));
         ImGui::PopTextWrapPos();
@@ -235,10 +237,62 @@ static void game_files_section(SDL_Window *win) {
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
 }
 
+// ------------------------------------------------------------------ the Mods tab
+// The folders under mods/ that hold a romfs/ (runtime/mods.h): one active at a time, or none (the game as it is)
+static const char *lang_name(const char *code) {
+    static const struct { const char *code, *en, *pt; } k[] = {
+        {"en-US", "English", "inglês"}, {"es", "Spanish", "espanhol"}, {"fr", "French", "francês"}, {"de", "German", "alemão"},
+        {"it", "Italian", "italiano"}, {"ja", "Japanese", "japonês"}, {"ko", "Korean", "coreano"},
+        {"zh-CN", "Simplified Chinese", "chinês simplificado"}, {"zh-TW", "Traditional Chinese", "chinês tradicional"}};
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) if (!strcmp(k[i].code, code)) return T(k[i].en, k[i].pt);
+    return code;
+}
+
+static void mods_section(SDL_Window *win, char (*mods)[128], int nmods, int *mod, int inst) {
+    static const SDL_DialogFileFilter filters[] = {{"Mod (.zip, .rar, .7z)", "zip;rar;7z"}};
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextUnformatted(T("Mods that replace the game's files (a romfs folder, as Atmosphere's LayeredFS): translations, textures, models. "
+                             "One at a time. Mods of the game's code (exefs, IPS patches, cheats) don't work in this port.",
+                             "Mods que trocam arquivos do jogo (uma pasta romfs, como o LayeredFS do Atmosphere): traduções, texturas, modelos. "
+                             "Um por vez. Mods do código do jogo (exefs, patches IPS, cheats) não funcionam neste port."));
+    ImGui::PopTextWrapPos();
+    ui_heading(T("Active mod", "Mod ativo"));
+    if (ImGui::RadioButton(T("None (the game as it is)", "Nenhum (o jogo original)"), *mod == 0)) *mod = 0;
+    for (int i = 0; i < nmods; i++) {
+        ImGui::PushID(i);
+        if (ImGui::RadioButton(mods[i], *mod == i + 1)) *mod = i + 1;
+        const char *lang = mod_language(mods[i]);
+        if (lang) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(g_pt ? "(troca os textos em %s)" : "(replaces the %s texts)", lang_name(lang));
+        }
+        ImGui::PopID();
+    }
+    if (!nmods) ImGui::TextDisabled("%s", T("No mods in the mods folder yet.", "Nenhum mod na pasta mods ainda."));
+    ImGui::Spacing();
+    if (inst == MOD_INSTALL_RUNNING) ImGui::TextDisabled("%s", T("Installing the mod...", "Instalando o mod..."));
+    else if (ImGui::Button(T("Install a mod...", "Instalar mod..."))) SDL_ShowOpenFileDialog(picked_mod, NULL, win, filters, 1, NULL, false);
+    ImGui::SameLine();
+    if (ImGui::Button(T("Open the mods folder", "Abrir a pasta de mods"))) {
+        char url[1200];
+        snprintf(url, sizeof url, "file:///%s", mods_dir_abs());
+        for (char *c = url; *c; c++) if (*c == '\\') *c = '/';
+        SDL_OpenURL(url);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", T("A mod copied there by hand (its folder, with a romfs inside) shows up here when you come back.",
+                                  "Um mod copiado para lá à mão (a pasta dele, com uma romfs dentro) aparece aqui quando você voltar."));
+    if (inst == MOD_INSTALL_FAIL_UNPACK || inst == MOD_INSTALL_FAIL_NOT_MOD)
+        ImGui::TextColored(k_red, "%s", inst == MOD_INSTALL_FAIL_UNPACK ? T("Couldn't unpack that file.", "Não foi possível abrir esse arquivo.")
+                                                                        : T("No mod for this game in that file (no romfs folder).",
+                                                                            "Esse arquivo não tem mod para este jogo (nenhuma pasta romfs)."));
+}
+
 // ------------------------------------------------------------------ the start screen
 extern "C" void launcher_lg_run(const char *root) {
     (void)root;
-    pick_language();
+    ui_pick_language();
+    g_pt = g_ui_lang == 1;
     ui_window_init();
     SDL_Window *win = ui_window();
     ImGuiContext *prev_ctx = ImGui::GetCurrentContext();  // (the in-game menu's, when back here after a reboot)
@@ -247,10 +301,9 @@ extern "C" void launcher_lg_run(const char *root) {
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = NULL;
-    static const ImWchar ranges[] = {0x20, 0xFF, 0};  // (Latin-1: Portuguese accents)
-    if (!io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", 26, NULL, ranges)) io.Fonts->AddFontDefault();
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().ScaleAllSizes(1.5f);
+    UiFonts fonts = ui_load_fonts();
+    ui_style();
+    UiScaler scaler;
     ImGui_ImplSDL3_InitForVulkan(win);
     vk_imgui_backend_init();
 
@@ -260,37 +313,43 @@ extern "C" void launcher_lg_run(const char *root) {
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
     bool ui2x_on = g_settings.ui2x;  // (the interface at 2x: runtime/ui2x.c)
-    bool full = g_settings.fullscreen, smaa = g_settings.antialias != AA_OFF, fps60 = g_settings.fps >= 60,
-         wildb = g_settings.wild_battle, skipc = g_settings.skip_controller;
-    // Translation: the folders under mods/ (runtime/mods.h); 0 = none (the game's own English)
+    bool full = g_settings.fullscreen, wildb = g_settings.wild_battle, skipc = g_settings.skip_controller;
+    // Mods: the folders under mods/ (runtime/mods.h); 0 = none (the game as it is)
     static char mods[MODS_MAX][128];
     int nmods = mods_list(mods, MODS_MAX), mod = 0;
     for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], g_settings.mod)) mod = i + 1;
     long shot_at = getenv("LARECOMP_LAUNCHER_SHOT") ? atol(getenv("LARECOMP_LAUNCHER_SHOT")) : 0, frame = 0;
     bool autoplay = getenv("LARECOMP_LAUNCHER_AUTOPLAY") != NULL, play = false;
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
+    enum { TAB_GAME, TAB_GRAPHICS, TAB_IMAGE, TAB_CONTROLS, TAB_MODS, NTABS };
+    int tab = getenv("LARECOMP_LAUNCHER_TAB") ? atoi(getenv("LARECOMP_LAUNCHER_TAB")) : keys_test ? TAB_CONTROLS : TAB_GAME;
+    if (getenv("LARECOMP_LAUNCHER_TAB") || keys_test) ui_tab_select(tab);
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
-    static const float bg[4] = {0.08f, 0.08f, 0.10f, 1};
-    static const SDL_DialogFileFilter mod_filters[] = {{"Translation / mod (.zip, .rar, .7z)", "zip;rar;7z"}};
+    static const float bg[4] = {0.04f, 0.06f, 0.05f, 1};
 
     while (!play) {
         menu_apply_window_requests(win);
         SDL_Event e;
+        bool focus_back = false;
         while (SDL_PollEvent(&e)) {
             if (bind_capture_event(&e)) continue;  // (waiting for a new key: the press is the binding's)
             ImGui_ImplSDL3_ProcessEvent(&e);
             if (e.type == SDL_EVENT_QUIT) exit(0);
+            if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focus_back = true;
         }
         char path[1024];
         if (take(g_pick_game, path, sizeof path)) setup_start(path);
         if (take(g_pick_mod, path, sizeof path)) mod_install_start(path);
         static int last_install;
         int inst = mod_install_state();
-        if (inst != last_install && inst == MOD_INSTALL_DONE) {  // a new translation: listed and chosen
-            nmods = mods_list(mods, MODS_MAX);
-            for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], mod_install_name())) mod = i + 1;
+        if ((inst != last_install && inst == MOD_INSTALL_DONE) || focus_back) {  // a new mod (installed, or copied by hand)
+            char was[128];
+            snprintf(was, sizeof was, "%s", mod ? mods[mod - 1] : "");
+            nmods = mods_list(mods, MODS_MAX), mod = 0;
+            const char *want = inst != last_install && inst == MOD_INSTALL_DONE ? mod_install_name() : was;
+            for (int i = 0; i < nmods; i++) if (!strcmp(mods[i], want)) mod = i + 1;
         }
         last_install = inst;
         bool ready = !setup_running() && setup_ready();
@@ -311,61 +370,71 @@ extern "C" void launcher_lg_run(const char *root) {
         }
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        g_scale = ui_scale(scaler, io.DisplaySize.y);
         ImGui::NewFrame();
+        // one window of a fixed size: the tabs change what is inside it, Play stays at the bottom
+        float ww = fminf(io.DisplaySize.x * 0.94f, 1150 * g_scale), wh = fminf(io.DisplaySize.y * 0.94f, 1000 * g_scale);
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y / 2), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::Begin(RT_APP_NAME, NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
-                                            ImGuiWindowFlags_NoSavedSettings);
-        game_files_section(win);
-        ImGui::SeparatorText(T("Settings", "Configurações"));
-        ImGui::PushItemWidth(420);
-        ImGui::Combo(T("Resolution", "Resolução"), &res, g_pt ? res_pt : res_en, 5);
-        if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
-        ImGui::Checkbox(T("Anti-aliasing", "Suavizar serrilhado"), &smaa);
-        // (these hook game functions by address: builds without address tables keep them off, runtime/fnhook.c)
+        ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
+        ImGui::Begin("##launcher", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+                                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+        ui_title(fonts.title, RT_APP_NAME);
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("v" RT_APP_VERSION).x);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("v" RT_APP_VERSION);
+        // (the frame rate modes and these options hook game functions by address: builds without tables keep them off)
         bool known = !setup_ready() || game_build("extracted/exefs") != GAME_BUILD_OTHER;
         const char *only = T("Only with version 1.0.0 (the base game) of Eevee or Pikachu for now.",
                              "Por enquanto só na versão 1.0.0 (o jogo base) do Eevee ou do Pikachu.");
-        ImGui::BeginDisabled(!known);
-        ImGui::Checkbox(T("60 fps (experimental)", "60 fps (experimental)"), &fps60);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", !known ? only : T("The world at 60 fps; menus and the Pokédex smoothed; battles and captures stay at 30.",
-                                                     "Mundo a 60 fps; menus e Pokédex suavizados; batalhas e capturas continuam a 30."));
-        ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
-                                                     "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
-        ImGui::Checkbox(T("Skip controller selection", "Pular a escolha do controle"), &skipc);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
-                                                     "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
-        ImGui::EndDisabled();
-        const char *none = T("None (English)", "Nenhuma (inglês)");
-        if (ImGui::BeginCombo(T("Translation", "Tradução"), mod ? mods[mod - 1] : none)) {
-            if (ImGui::Selectable(none, mod == 0)) mod = 0;
-            for (int i = 0; i < nmods; i++)
-                if (ImGui::Selectable(mods[i], mod == i + 1)) mod = i + 1;
-            ImGui::EndCombo();
-        }
-        ImGui::PopItemWidth();
-        if (inst == MOD_INSTALL_RUNNING) ImGui::TextDisabled("%s", T("Installing the translation...", "Instalando a tradução..."));
-        else {
-            if (ImGui::SmallButton(T("Install a translation...", "Instalar tradução...")))
-                SDL_ShowOpenFileDialog(picked_mod, NULL, win, mod_filters, 1, NULL, false);
-            if (inst == MOD_INSTALL_FAIL_UNPACK || inst == MOD_INSTALL_FAIL_NOT_MOD) {
-                ImGui::SameLine();
-                ImGui::TextColored(k_red, "%s", inst == MOD_INSTALL_FAIL_UNPACK ? T("Couldn't unpack that file.", "Não foi possível abrir esse arquivo.")
-                                                                                : T("No translation for this game in that file.", "Esse arquivo não tem tradução para este jogo."));
+        float footer = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2 + ImGui::GetStyle().WindowPadding.y * 0.5f;
+        ui_tabs_begin(&tab, NTABS);
+        if (ImGui::BeginTabBar("##tabs")) {
+            const char *names[NTABS] = {T("Game", "Jogo"), T("Graphics", "Gráficos"), T("Image and sound", "Imagem e som"),
+                                        T("Controls", "Controles"), "Mods"};
+            for (int t = 0; t < NTABS; t++) {
+                if (!ui_tab(names[t], t, &tab)) continue;
+                ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
+                if (t == TAB_GAME) {
+                    game_files_section(win);
+                    ui_heading(T("Options", "Opções"));
+                    ImGui::BeginDisabled(!known);
+                    ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
+                                                                 "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
+                    ImGui::Checkbox(T("Skip controller selection", "Pular a escolha do controle"), &skipc);
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
+                                                                 "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
+                    ImGui::EndDisabled();
+                } else if (t == TAB_GRAPHICS) {
+                    const char *extra[] = {T("Render resolution", "Resolução de renderização")};
+                    float x = ui_graphics_x(extra, 1);
+                    ui_row(extra[0], x);
+                    ImGui::Combo("##res", &res, g_pt ? res_pt : res_en, 5);
+                    if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
+                    ImGui::Separator();
+                    ui_page_graphics(x, known);
+                    ui2x_section(ready, &ui2x_on);
+                } else if (t == TAB_IMAGE) {
+                    ui_page_image_sound();
+                } else if (t == TAB_CONTROLS) {
+                    keys_section();
+                } else {
+                    mods_section(win, mods, nmods, &mod, inst);
+                }
+                ImGui::EndChild();
+                ImGui::EndTabItem();
             }
+            ImGui::EndTabBar();
         }
-        ui2x_section(ready, &ui2x_on);
-        if (keys_test) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-        if (ImGui::CollapsingHeader(T("Keyboard and mouse", "Teclado e mouse"))) keys_section();
-        ImGui::Spacing();
+        ImGui::Separator();
         ImGui::BeginDisabled(!ready);
         if (frame == 0 && ready) ImGui::SetKeyboardFocusHere();
         if (ImGui::Button(T("Play", "Jogar"), ImVec2(-FLT_MIN, 0))) play = true;
         ImGui::EndDisabled();
-        ImGui::TextDisabled("v" RT_APP_VERSION);
+        if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", T("Set up the game files first (Game tab).", "Configure os arquivos do jogo antes (aba Jogo)."));
         ImGui::End();
 
         ImGui::Render();
@@ -377,10 +446,7 @@ extern "C" void launcher_lg_run(const char *root) {
     }
     g_settings.res_height = res_lines[res];
     g_settings.fullscreen = full;
-    // (the box is anti-aliasing on / off: TAA or FSR 3.1, chosen in the F12 menu, stay)
-    g_settings.antialias = !smaa ? AA_OFF : g_settings.antialias == AA_TAA || g_settings.antialias == AA_FSR3 ? g_settings.antialias : AA_SMAA;
-    settings_apply_levels();  // (the upscaler follows)
-    g_settings.fps = !fps60 ? 30 : g_settings.fps == 120 ? 120 : 60;  // (120: the F12 menu's, kept)
+    settings_apply_levels();  // (the upscaler follows the anti-aliasing)
     g_settings.wild_battle = wildb;
     g_settings.skip_controller = skipc;
     g_settings.ui2x = ui2x_on;
