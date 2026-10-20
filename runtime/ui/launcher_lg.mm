@@ -612,6 +612,18 @@ extern "C" void launcher_lg_run(const char *root) {
                     ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
                                                              "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
                 ImGui::EndDisabled();
+                {   // A / B and X / Y by the layout's positions (runtime/hle/bindings.c bind_set_layout)
+                    const char *ll[] = {T("Controller layout", "Layout do controle")};
+                    float lx = ui_label_x(ll, 1);
+                    const char *lay[] = {T("Nintendo (A right, B bottom)", "Nintendo (A à direita, B embaixo)"),
+                                         T("Xbox (A bottom, B right)", "Xbox (A embaixo, B à direita)")};
+                    int lv = bind_layout();
+                    ui_row(ll[0], lx);
+                    if (ImGui::Combo("##padlayout", &lv, lay, 2)) bind_set_layout(lv);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", T("Which controller buttons are A / B and X / Y. Xbox swaps them, as the letters on an Xbox controller. The button prompts follow.",
+                                                  "Quais botões do controle são A / B e X / Y. Xbox os troca, como as letras de um controle de Xbox. Os ícones dos botões acompanham."));
+                }
             } else if (tab == TAB_GRAPHICS) {
                 const char *extra[] = {T("Resolution", "Resolução")};
                 float x = ui_graphics_x(extra, 1);

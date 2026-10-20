@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Controller layout** (launcher, Game page): Nintendo (A on the right button, B on the bottom, as before) or Xbox (A
+  on the bottom, B on the right, X on the left, Y on the top - the letters printed on an Xbox controller).
+  `larecomp.ini`: `pad_layout = nintendo|xbox`. The layout sets the controller's default bindings; changing it moves
+  A / B and X / Y where they are still at the old defaults (a remap of the Controls page stays), and the button
+  prompts follow the bindings.
 - **SSAO at half its intensity on the title screen and in cutscenes** (when it is on), the setting's own in the world
   and in battles; Pikachu and Eevee 1.0.0.
   - The title screen (the logo with Pikachu or Eevee): before the world's first update this boot - the world's update
