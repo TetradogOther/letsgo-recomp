@@ -9,9 +9,12 @@ This project is built on the runtime and recompiler of **[LAS Recomp](https://gi
 Peiikai, the static recompilation of *The Legend of Zelda: Link's Awakening*, adapted here to a different game
 engine.
 
-**Highlights:** up to **4K** internal resolution (supersampled on smaller screens) · **SMAA** anti-aliasing (the
-original has none) · **16x anisotropic filtering** · the game's own **30 fps**, locked and stable, or an experimental **60 fps** overworld · experimental **wild battles** ·
-keyboard, mouse and any controller · fan translations in one click.
+**Highlights:** up to **4K** internal resolution (supersampled on smaller screens) · anti-aliasing the original
+doesn't have: **SMAA**, **TAA** or **AMD FSR 3.1** · **ambient occlusion (SSAO)** and **indirect light (GI)** ·
+**16x anisotropic filtering** and smooth shadows · the game's own **30 fps**, locked and stable, or an experimental
+**60 / 120 fps** overworld, plus **FSR 3.1 frame generation** · a **2x interface** and sharper text · experimental
+**wild battles** · keyboard, mouse and any controller · a launcher with every setting, and **mods** (fan translations,
+textures) in one click, several at once.
 
 > [!IMPORTANT]
 > **No game files are included.** You need your own legally obtained copy of *Pokémon: Let's Go, Eevee!* or
@@ -20,6 +23,26 @@ keyboard, mouse and any controller · fan translations in one click.
 > this repository or of its releases.
 
 *Português: [veja a seção em português](#português) no fim, com o passo a passo da tradução PT-BR.*
+
+## Original settings vs. Let's Go Recomp 0.5.0
+
+The same scene, the same frame, rendered by this port twice: on the left with the game's original settings (1080p,
+no anti-aliasing, no ambient occlusion or indirect light, the game's shadows and interface), on the right with 0.5.0's
+(rendered at 4K and scaled to 1080p, TAA, SSAO and GI on high, smooth shadows, the 2x interface). The bottom row is the
+marked area at 2x. These are not captures of a Switch.
+
+![Pewter City Gym: contact shadows under the rocks, smooth edges](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-gym.jpg)
+
+![A city: the fence and plants without jagged edges](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-city.jpg)
+
+<details>
+<summary>Two more scenes (two routes)</summary>
+
+![A route: the cliff edge and the tree](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-lass.jpg)
+
+![A route: grass and flowers](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-compare-route.jpg)
+
+</details>
 
 [![Watch the showcase video on YouTube](docs/shots/video.jpg)](https://youtu.be/mGk-wBu1wCk)
 
@@ -38,9 +61,11 @@ keyboard, mouse and any controller · fan translations in one click.
 </tr>
 </table>
 
-*Screenshots of this port running on Windows (game rendered at 1280x720, captured straight from the renderer).*
+*Screenshots of this port running on Windows (game rendered at 1280x720, captured straight from the renderer; taken
+before 0.5.0's graphics options).*
 
 ## Contents
+- [Original settings vs. 0.5.0](#original-settings-vs-lets-go-recomp-050)
 - [Status](#status)
 - [Requirements](#requirements)
 - [Supported game version](#supported-game-version)
@@ -88,7 +113,7 @@ accepted. What was tested:
 | | Supported | Not supported |
 |---|---|---|
 | Game | *Pokémon: Let's Go, Eevee!* (title id `0100187003A36000`) and, since 0.2.1, *Let's Go, Pikachu!* (`010003F003A34000`). Pikachu 1.0.0 was tested here from the setup to the name screen of a new game; a player reported Pikachu 1.0.2 playable up to receiving Pikachu ([issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1)) | |
-| Version | **1.0.0**, the base game, of either: the only builds with the experimental **60 fps** and **wild battles** options and **Skip controller selection**, which work on addresses of the game's executable (mapped for both, `tools/addrmap.py`); the launcher greys them out for any other | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates are accepted, without those options, but untested here |
+| Version | **1.0.0**, the base game, of either: the only builds with the experimental **60 / 120 fps** and **wild battles** options and **Skip controller selection**, which work on addresses of the game's executable (mapped for both, `tools/addrmap.py`); the launcher greys them out for any other | the 1.0.1 (January 2019) and 1.0.2 (July 2019) updates are accepted, without those options, but untested here |
 | Files | the extracted **`exefs`** folder (`main`, `main.npdm`, `rtld`, `sdk`, `subsdk0`, `subsdk1`) and the **`romfs`** folder, or a `romfs.bin` image (both tested) | `.xci`, `.nsp`, `.nsz`, `.xcz` or `.nca` files: extract them first |
 | Region | the same title id is listed in the US, UK, Brazil, Japan, Korea and Hong Kong / Taiwan eShops, with the same two updates for all of them ([titledb](https://github.com/blawar/titledb)). Switch updates are patches over the base game, so every region's 1.0.0 is the same. Tested with one dump, from a cartridge | |
 | Game language | the 9 languages of the game's own language screen, shown when starting a new game: English, Español, Français, Deutsch, Italiano, Japanese, Korean, Simplified and Traditional Chinese (tested). The game warns the choice can't be changed later, and an existing save keeps its language | |
@@ -97,7 +122,7 @@ accepted. What was tested:
 | Extras | the communication screens open without crashing (local trade searches and B goes back; Mystery Gift waits on "Connecting...", which the game gives no way out of offline) | the Poké Ball Plus, Pokémon GO / GO Park transfers, local and online play, Mystery Gift, the second player |
 
 The launcher reads the program id in your `exefs/main.npdm` and refuses anything other than the two games, saying
-why. The 60 fps, wild battles and skip controller selection options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
+why. The 60 / 120 fps, wild battles and skip controller selection options need the 1.0.0 `main` of either game (build id starting with `0A3F0D21E67DAD80`
 for Eevee, `1C375692DE4F4B87` for Pikachu).
 
 ## How to play
@@ -113,7 +138,18 @@ for Eevee, `1C375692DE4F4B87` for Pikachu).
    CPUs with fewer threads. A progress bar shows how far it got.
 6. Click **Play**.
 
-![The launcher](docs/launcher.png)
+<table>
+<tr>
+<td><img src="docs/images/launcher-game.png" alt="The launcher's Game page"></td>
+<td><img src="docs/images/launcher-graphics.png" alt="The launcher's Graphics page"></td>
+<td><img src="docs/images/launcher-mods.png" alt="The launcher's Mods page"></td>
+</tr>
+<tr><td>Game: the game files and options</td><td>Graphics: the same settings as the F12 menu</td><td>Mods: several at once, in order</td></tr>
+</table>
+
+In the game, **F12** opens the same settings (on a controller: − and + together, then Settings), applied at once:
+
+![The F12 settings in the game](https://github.com/raulzrrs/letsgo-recomp/releases/download/v0.5.0/screenshot-f12-menu.jpg)
 
 **Both games:** a folder holds one set-up game (its `extracted\` folder), so to have *Eevee* and *Pikachu* side by side
 unzip the release twice (for example `LetsGoRecomp-Eevee` and `LetsGoRecomp-Pikachu`) and set each one up with its game.
@@ -125,22 +161,32 @@ Settings (`larecomp.ini`), saves (`save\`; `save-pikachu\` for Pikachu), the gam
 ## Features
 
 - **Native code:** the game's code runs compiled for your CPU, not interpreted or emulated.
-- **Image quality:**
+- **Image quality** (the launcher's Graphics page and the in-game F12 menu, the same settings):
   - internal resolution from 720p to 4K, including above your screen's (supersampling, scaled down with a
-    high-quality filter);
-  - SMAA anti-aliasing (the game has none) and 16x anisotropic filtering;
-  - any window size or aspect ratio, and fullscreen.
+    high-quality filter); any window size or aspect ratio, and fullscreen;
+  - anti-aliasing (the game has none): **SMAA**, **TAA**, or **AMD FSR 3.1**, which also upscales a lower render
+    resolution (Native AA to Ultra Performance); otherwise **FSR 1** or bilinear for a lower resolution;
+  - **ambient occlusion (SSAO)** and **indirect light (GI)**, off / low / medium / high; the shadow map filtered smooth;
+    16x anisotropic filtering; a better blur and depth of field for the game's menus and title;
+  - brightness, contrast, saturation and the TAA / FSR 3.1 sharpness;
+  - the **interface at 2x**: the game's menu images redrawn at twice their resolution from your own files (waifu2x,
+    made once on request), and text drawn at the output resolution.
 - **No shader stutter:** the game's GPU shaders are translated in parallel and cached on disk (SPIR-V and Vulkan
   pipeline caches), and objects wait for their shader instead of popping in.
-- **Simple launcher:** pick the game folder once, then resolution, fullscreen, anti-aliasing, translation and key
-  bindings. In English, or in Brazilian Portuguese when Windows is.
+- **Launcher:** its own window, with pages for the game files and options, the graphics, image and sound, the
+  controls and the mods. In English, or in Brazilian Portuguese when Windows is.
 - **Keyboard and mouse:** all keys can be rebound in the launcher. The mouse aims Poké Balls like the Switch's motion
   controls and acts as your finger on the touch screen.
 - **Controllers:** through SDL 3's gamepad support, with the handheld-mode layout (tested with one gamepad so far). Play with your partner works with a controller alone (the right stick moves a virtual finger).
-- **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click.
-- **Experimental options** (start screen, off by default):
-  - **60 fps:** the overworld at 60 fps natively (the game's time step is halved there, so nothing speeds up); menus
-    and the Pokédex shown at 60 with an in-between frame; battles and captures stay at 30 fps;
+- **Translations and mods:** Atmosphere-style LayeredFS mods, installed from the downloaded file with one click,
+  several at once in the order you pick.
+- **Experimental options:**
+  - **Frame rate limit, 60 or 120 fps** (the Graphics page or F12, switched while playing): the overworld at that rate
+    natively (the game's time step is shortened there, so nothing speeds up, and the player walks and turns at the
+    same speed as at 30); menus and the Pokédex shown at 60 with an in-between frame; battles and captures stay at
+    30 fps;
+  - **FSR 3.1 frame generation** (with FSR 3.1 anti-aliasing): AMD's frame generation adds a frame between each two;
+  - **Skip controller selection:** the game starts at the Game Freak logo;
   - **Wild battles:** touching a wild Pokémon starts a classic battle against it (species, level, gender, IVs,
     level-up moves), then the capture. Details in [docs/MODO-BATALHA.md](docs/MODO-BATALHA.md) (Portuguese).
 
@@ -213,6 +259,10 @@ below is *Eevee* 1.0.0 unless the row says otherwise:
 | Wild battles (experimental): battle, then capture, back to the world (Route 1) | ✅ played |
 | *Pikachu* 1.0.0: setup, new game up to the name screen, the world, menus, 60 fps, wild battles and captures (from a copy of an Eevee save), the PT-BR translation, the Pokémon GO settings screen | ✅ played |
 | *Pikachu* 1.0.2 (another player, [issue #1](https://github.com/raulzrrs/letsgo-recomp/issues/1)): AMD RX 7800 XT, Windows 10, up to receiving Pikachu | ✅ reported |
+| 0.5.0's graphics (TAA, FSR 1, FSR 3.1, SSAO and GI on high) on both games, in the world and in battles: SSAO and GI no longer flicker as the camera moves | ✅ played |
+| 120 fps (experimental) | ✅ Pikachu, scripted run; the walking fix hooks on both games; walking speed measured by the PR's author on Pikachu (391 cm/s at 30, 60 and 120 fps) |
+| FSR 3.1 frame generation (experimental) | reported by the PR's author (RTX 5070 Ti); not tested here |
+| Launcher (its window, the pages, Play) and the F12 menu; several mods at once (a translation plus another mod) | ✅ |
 
 **Not tested yet:** a whole *Pikachu* playthrough (its own new game past the name screen, Play with Pikachu, its
 exclusive Pokémon), the 1.0.1 / 1.0.2 updates here, the rest of the story past Viridian City (gyms, other cities and caves, the Elite Four), every
@@ -224,9 +274,12 @@ move animation and every Pokémon, AMD and Intel GPUs, laptops, other Windows ve
   tested; the experimental 60 fps and wild battles options need the 1.0.0 (base game) of either.
 - **Windows only.** The Linux code path comes from LAS Recomp and builds in principle, but has never been tested
   with this game.
-- **60 fps is experimental and partial.** The game advances most of its logic one step per frame: only the
-  overworld follows the game's time step, so only it runs at 60 fps natively; battles and captures stay at 30.
-  The research is in [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md) (Portuguese).
+- **60 / 120 fps are experimental and partial.** The game advances most of its logic one step per frame: only the
+  overworld follows the game's time step, so only it runs at 60 or 120 fps natively; battles and captures stay at
+  30. The player's walking is corrected for it; other characters' movement hasn't been measured. 120 fps is less
+  tested than 60. The research is in [docs/PESQUISA-60FPS.md](docs/PESQUISA-60FPS.md) (Portuguese).
+- **Switching to TAA while playing** shows one or two black frames.
+- **The 2x interface** shows a few frames of thin horizontal stripes in the dark frames of an area change.
 - **Wild battles are experimental:** experience is not split between the battle and the capture yet, and the
   touched Pokémon's nature, shiny state and regional form are not carried over.
 - **Auras:** the colored aura of special wild Pokémon sometimes disappears for a single frame.
@@ -305,7 +358,7 @@ so it cannot be distributed. The release ships the tools instead, and builds it 
 
 **Does it work with Let's Go, Pikachu!?** Since 0.2.1, yes, with its own save folder (`save-pikachu\`). Tested
 here with 1.0.0 up to the name screen of a new game; a player played 1.0.2 up to receiving Pikachu (issue #1). The
-experimental 60 fps and wild battles options work with Pikachu 1.0.0 too.
+experimental 60 / 120 fps and wild battles options work with Pikachu 1.0.0 too.
 
 **Can I use an updated game (v1.0.1 / v1.0.2)?** It is accepted since 0.2.1, but not tested here, and the
 experimental options stay off for it (they need the 1.0.0 of either game).
@@ -383,8 +436,13 @@ covers this code only and grants no rights to the game.
 recompilação estática, baseado no [LAS Recomp](https://github.com/peiikai/LASRecomp). **Nenhum arquivo do jogo vem
 junto:** você precisa da sua própria cópia, obtida legalmente, extraída (pastas `exefs` e `romfs`).
 
+**O que tem de novo na 0.5.0:** um launcher próprio, com páginas para o jogo, os gráficos, imagem e som, os
+controles e os mods; antisserrilhado TAA ou AMD FSR 3.1, oclusão de ambiente (SSAO) e luz indireta (GI), as mesmas
+opções no menu F12 dentro do jogo; 60 ou 120 fps experimentais com a velocidade de andar corrigida; geração de quadros
+do FSR 3.1; e vários mods ao mesmo tempo. Veja a [comparação](#original-settings-vs-lets-go-recomp-050) no topo.
+
 **Versões aceitas:** *Let's Go, Eevee!* e, desde a 0.2.1, *Pikachu!*, em qualquer versão. O mais testado é o Eevee
-**1.0.0**; as opções experimentais de 60 fps e batalhas selvagens valem para a 1.0.0 dos dois jogos. O Pikachu 1.0.0 foi testado até a tela do
+**1.0.0**; as opções experimentais de 60 / 120 fps e batalhas selvagens valem para a 1.0.0 dos dois jogos. O Pikachu 1.0.0 foi testado até a tela do
 nome de um jogo novo, e um jogador relatou o 1.0.2 jogável até receber o Pikachu.
 Cartucho ou eShop de qualquer região: o jogo tem o mesmo title id (`0100187003A36000`) e as mesmas atualizações nas
 lojas dos EUA, Reino Unido, Brasil, Japão, Coreia e Hong Kong / Taiwan.
