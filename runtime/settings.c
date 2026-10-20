@@ -107,8 +107,7 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "fsr3_preset"))
         g_settings.fsr3_preset = !strcmp(val, "native") ? FSR3_NATIVE_AA : !strcmp(val, "balanced") ? FSR3_BALANCED :
                                  !strcmp(val, "performance") ? FSR3_PERFORMANCE : !strcmp(val, "ultra") ? FSR3_ULTRA_PERFORMANCE : FSR3_QUALITY;
-    else if (!strcmp(key, "ffx_swapchain")) g_settings.ffx_swapchain = atoi(val) != 0;
-    else if (!strcmp(key, "frame_gen")) g_settings.frame_gen = atoi(val) > 0 ? 2 : 0;  // (1: an older on / off)
+    else if (!strcmp(key, "frame_gen")) g_settings.frame_gen = atoi(val) == 1 ? 2 : atoi(val);  // (1: an older on / off)
     else if (!strcmp(key, "render_thread")) g_settings.render_thread = atoi(val) != 0;
     else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
     else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
@@ -150,7 +149,7 @@ void settings_apply_levels(void) {
     g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f, g_settings.gi_temporal = true;
     if (g_settings.antialias < AA_OFF || g_settings.antialias > AA_FSR3) g_settings.antialias = AA_SMAA;
     g_settings.upscaler = g_settings.antialias == AA_FSR3 ? UPSCALE_FSR3 : UPSCALE_BILINEAR;
-    if (g_settings.frame_gen != 0 && g_settings.frame_gen != 2) g_settings.frame_gen = 2;
+    if (g_settings.frame_gen < 2 || g_settings.frame_gen > 4) g_settings.frame_gen = 0;
 }
 
 void settings_load(void) {
@@ -196,7 +195,6 @@ void settings_save(void) {
     fprintf(f, "taa_sharpness = %.2f\n", g_settings.taa_sharpness);
     static const char *const presets[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "fsr3_preset = %s\n", presets[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1]);
-    fprintf(f, "ffx_swapchain = %d\n", g_settings.ffx_swapchain);
     fprintf(f, "frame_gen = %d\n", g_settings.frame_gen);
     fprintf(f, "mod = %s\n", g_settings.mod);
     fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);

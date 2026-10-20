@@ -139,61 +139,6 @@ void vk_device_fault_report(void) {
             (unsigned long long)vend[i].vendorFaultData);
 }
 
-// AMD's frame generation swapchain (setting ffx_swapchain; LARECOMP_FFX_SWAPCHAIN=0/1 overrides it) needs three
-// queues besides the game's, picked as AMD's sample does: present (graphics + compute + present: it composes there),
-// image acquire (no capability needed: a transfer-only family first) and async compute (a compute-only family first).
-// Without a free queue for each, or without the DLL, the window keeps the driver's swapchain.
-static bool ffx_queues(void) {
-    const char *e = getenv("LARECOMP_FFX_SWAPCHAIN");
-    g_vk.ffx_ok = g_vk.ffx_sc = false;
-    if (e && atoi(e) == 0) return false;
-    if (!fsr3_available()) { LOG("[vk] no amd_fidelityfx_vk.dll: no frame generation\n"); return false; }
-    uint32_t nq = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nq, NULL);
-    VkQueueFamilyProperties qp[16];
-    if (nq > 16) nq = 16;
-    vkGetPhysicalDeviceQueueFamilyProperties(g_vk.phys, &nq, qp);
-    uint32_t left[16];
-    for (uint32_t i = 0; i < nq; i++) {
-        uint32_t c = qp[i].queueCount - (i == g_vk.qfam);  // (the game's queue is the first of its family)
-        left[i] = c > 15 ? 15 : c;
-    }
-    const VkQueueFlags GC = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
-    // per queue: the flags it needs, then the ones it should not have (relaxed on a second pass), and present support
-    struct { VkQueueFlags need, avoid; bool present; } want[3] = {
-        {GC, 0, true},                                       // present
-        {VK_QUEUE_TRANSFER_BIT, GC, false},                  // image acquire
-        {VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, false}  // async compute
-    };
-    for (int k = 0; k < 3; k++) {
-        g_vk.ffx_fam[k] = UINT32_MAX;
-        for (int pass = 0; pass < 2 && g_vk.ffx_fam[k] == UINT32_MAX; pass++)
-            for (uint32_t i = 0; i < nq; i++) {
-                VkBool32 pres = VK_TRUE;
-                if (want[k].present) vkGetPhysicalDeviceSurfaceSupportKHR(g_vk.phys, i, g_vk.surface, &pres);
-                if (!left[i] || !pres || (qp[i].queueFlags & want[k].need) != want[k].need) continue;
-                if (pass == 0 && (qp[i].queueFlags & want[k].avoid)) continue;
-                g_vk.ffx_fam[k] = i;
-                left[i]--;
-                break;
-            }
-        if (g_vk.ffx_fam[k] == UINT32_MAX) {
-            LOG("[vk] ffx_swapchain: no free queue for its %s, the normal swapchain\n", k == 0 ? "present" : k == 1 ? "image acquire" : "async compute");
-            return false;
-        }
-    }
-    g_vk.ffx_ok = true;
-    return true;
-}
-
-// AMD's swapchain is wanted now: frame generation (exec.c), the setting ffx_swapchain, LARECOMP_FFX_SWAPCHAIN=1
-static bool ffx_wanted(void) {
-    extern bool vk_fg_wanted(void);
-    const char *e = getenv("LARECOMP_FFX_SWAPCHAIN");
-    return g_vk.ffx_ok && ((e && atoi(e) != 0) || g_settings.ffx_swapchain || vk_fg_wanted());
-}
-bool vk_fg_available(void) { return g_vk.ffx_ok; }  // (the F12 menu)
-
 static void create_device(void) {
     uint32_t ne = 0;
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
@@ -265,23 +210,12 @@ static void create_device(void) {
     b->shaderClipDistance = h->shaderClipDistance;
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
     static const float prio[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-    VkDeviceQueueCreateInfo qi[4] = {{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.qfam,
+    VkDeviceQueueCreateInfo qi[1] = {{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = g_vk.qfam,
                                       .queueCount = 1, .pQueuePriorities = prio}};
-    uint32_t nqi = 1, ffx_idx[3] = {0};
-    if (ffx_queues()) {  // (one create info per family, the queues numbered in it)
-        for (int k = 0; k < 3; k++) {
-            uint32_t i = 0;
-            while (i < nqi && qi[i].queueFamilyIndex != g_vk.ffx_fam[k]) i++;
-            if (i == nqi) qi[nqi++] = (VkDeviceQueueCreateInfo){.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                                                .queueFamilyIndex = g_vk.ffx_fam[k], .pQueuePriorities = prio};
-            ffx_idx[k] = qi[i].queueCount++;
-        }
-    }
-    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f, .queueCreateInfoCount = nqi,
+    VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f, .queueCreateInfoCount = 1,
                              .pQueueCreateInfos = qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
     VK_CHECK(vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.dev));
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
-    for (int k = 0; g_vk.ffx_ok && k < 3; k++) vkGetDeviceQueue(g_vk.dev, g_vk.ffx_fam[k], ffx_idx[k], &g_vk.ffx_queue[k]);
 
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
                                  .vulkanApiVersion = VK_API_VERSION_1_3};
@@ -352,37 +286,6 @@ static VkPresentModeKHR present_mode(void) {
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-static uint64_t fg_last_count;  // (fg_throttle, below: AMD's presents after the last frame, and whether it had generation)
-static bool fg_last;
-
-// The swapchain's functions: the driver's, or AMD's replacements for its swapchain (g_vk.ffx_sc, fsr3_sc_create)
-static Fsr3SwapchainFns sc_fn = {vkGetSwapchainImagesKHR, vkAcquireNextImageKHR, vkQueuePresentKHR};
-
-// FidelityFX's swapchain in place of the driver's: false when it cannot be made (then the driver's from now on)
-static bool create_ffx_swapchain(const VkSwapchainCreateInfoKHR *ci) {
-    for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
-    g_vk.sc_count = 0;
-    fsr3_sc_destroy();  // (the previous one: a surface has one swapchain at a time)
-    g_vk.swapchain = VK_NULL_HANDLE;
-    Fsr3Queues q = {{g_vk.queue, g_vk.qfam}, {g_vk.ffx_queue[2], g_vk.ffx_fam[2]}, {g_vk.ffx_queue[0], g_vk.ffx_fam[0]},
-                    {g_vk.ffx_queue[1], g_vk.ffx_fam[1]}};
-    if (fsr3_sc_create(ci, &q, &g_vk.swapchain, &sc_fn)) return g_vk.ffx_sc = true;
-    g_vk.ffx_sc = g_vk.ffx_ok = false;  // (not again)
-    sc_fn = (Fsr3SwapchainFns){vkGetSwapchainImagesKHR, vkAcquireNextImageKHR, vkQueuePresentKHR};
-    LOG("[vk] AMD's swapchain failed: the normal swapchain, no frame generation\n");
-    return false;
-}
-
-// Back to the driver's swapchain (frame generation turned off): AMD's and its real one go first
-static void drop_ffx_swapchain(void) {
-    for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
-    g_vk.sc_count = 0;
-    fsr3_sc_destroy();
-    g_vk.swapchain = VK_NULL_HANDLE;
-    g_vk.ffx_sc = false;
-    sc_fn = (Fsr3SwapchainFns){vkGetSwapchainImagesKHR, vkAcquireNextImageKHR, vkQueuePresentKHR};
-}
-
 static void create_swapchain(void) {
     VkSurfaceCapabilitiesKHR caps;
     VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_vk.phys, g_vk.surface, &caps));
@@ -410,27 +313,14 @@ static void create_swapchain(void) {
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
         .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
-    fg_last = false;  // (fg_throttle: nothing of the old swapchain to wait for)
-    bool ffx = ffx_wanted();
-    if (ffx && old && !g_vk.ffx_sc) {  // (the driver's one goes first: a surface has one swapchain at a time)
-        for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
-        g_vk.sc_count = 0;
-        vkDestroySwapchainKHR(g_vk.dev, old, NULL);
-        g_vk.swapchain = VK_NULL_HANDLE;
-    }
-    if (!ffx && g_vk.ffx_sc) drop_ffx_swapchain();
-    if (!ffx || !create_ffx_swapchain(&ci)) {
-        if (!g_vk.swapchain) ci.oldSwapchain = old = VK_NULL_HANDLE;  // (destroyed above, or AMD's)
-        VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
-        for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
-        if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
-    }
+    VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
+    for (uint32_t i = 0; i < g_vk.sc_count; i++) vkDestroyImageView(g_vk.dev, g_vk.sc_views[i], NULL);
+    if (old) vkDestroySwapchainKHR(g_vk.dev, old, NULL);
     g_vk.sc_format = sf.format;
     g_vk.sc_extent = ext;
-    // (count first: AMD's replacement leaves the count as given when it fills the array)
-    sc_fn.images(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, NULL);
+    vkGetSwapchainImagesKHR(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, NULL);
     if (g_vk.sc_count > 8) g_vk.sc_count = 8;
-    sc_fn.images(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
+    vkGetSwapchainImagesKHR(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
         VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = g_vk.sc_images[i],
                                     .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = sf.format,
@@ -440,7 +330,6 @@ static void create_swapchain(void) {
 }
 
 static void recreate_swapchain(void) {
-    fsr3_sc_wait_presents();
     vkDeviceWaitIdle(g_vk.dev);
     create_swapchain();
 }
@@ -481,9 +370,7 @@ bool vk_frame_begin(const float clear[4]) {
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     if (!w || !h) return false;  // minimised
-    if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height ||
-        ffx_wanted() != g_vk.ffx_sc)  // (frame generation turned on / off: AMD's swapchain or the driver's)
-        recreate_swapchain();
+    if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height) recreate_swapchain();
     if (!g_vk.swapchain) return false;
     static int trace = -1;
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
@@ -491,10 +378,10 @@ bool vk_frame_begin(const float clear[4]) {
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
     vk_wait_seq(slot_seq[slot]);
-    VkResult r = sc_fn.acquire(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
+    VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         recreate_swapchain();
-        r = sc_fn.acquire(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
+        r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
     }
     static unsigned acquire_fails;  // (a window the driver keeps reporting out of date: logged once per 600, not every frame)
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
@@ -555,31 +442,9 @@ static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
     image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 }
 
-// Frame generation: AMD's presenter thread (FidelityFX SDK 1.1.4, FrameInterpolationSwapchainVK.cpp) shows only the
-// latest frame handed to it, and while it waits to space its presents (by the average of the last frame times) newer
-// ones replace older ones. With two dropped in a row, the generation - on the game queue, into one of two outputs -
-// waits for a composition that never comes: the GPU and then this thread stall for good (in the scripted turbo runs
-// after a slow frame, 1 in 3). So after a frame with generation, the next present waits until the presenter has made
-// a present since then (it has taken that frame or the one before: never two dropped). At a steady frame rate it has,
-// long before; at most 100 ms (a present it could not make: no image).
-static void fg_throttle(void) {
-    if (!fg_last) return;
-    uint64_t t0 = SDL_GetTicksNS();
-    while (fsr3_sc_present_count() <= fg_last_count) {
-        if (SDL_GetTicksNS() - t0 > 100000000) {
-            static int n;
-            if (n++ < 10) LOG("[vk] frame generation: the presenter made no present in 100 ms\n");
-            break;
-        }
-        SDL_DelayPrecise(250000);
-    }
-}
-
 // End rendering into the window image and present it. shot_path: also save the window image as PNG.
 void vk_frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
-    extern bool vk_fg_present(void);
-    bool fg = vk_fg_present();  // (frame generation for this present, or none: exec.c)
     VkCommandBuffer cb = vk_cmd();
     vkCmdEndRendering(cb);
     VkSpan shot = {0};
@@ -594,9 +459,7 @@ void vk_frame_end(const char *shot_path) {
     static int trace = -1;
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
     if (trace) LOG("[vk] present image %u\n", img);
-    fg_throttle();
-    VkResult r = sc_fn.present(g_vk.queue, &pi);
-    fg_last_count = fsr3_sc_present_count(), fg_last = fg;
+    VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
     if (trace) LOG("[vk] presented: %d\n", r);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) recreate_swapchain();
     cur_frame.ok = false;
@@ -661,6 +524,7 @@ uint64_t renderer_present_count(void);
 void renderer_save_texture_tex(TexBackend *b, const char *path);
 
 static uint64_t frames, total_frames, g_frame_counter;
+static uint64_t g_window_images;  // (images presented: present_image)
 uint64_t renderer_present_count(void) { return total_frames; }
 uint64_t vk_frame_counter(void) { return g_frame_counter; }
 static float g_shot_crop[4] = {0, 0, 1, 1};
@@ -678,38 +542,12 @@ void backend_represent(void) {
     else SDL_Delay(16);
 }
 
-void backend_present(NvnTexture *t) {
-    {   // (LARECOMP_HEAL_KEYS research key F5: every texture re-checks its memory)
-        extern volatile int g_heal_tex;
-        extern void backend_pool_written(uint64_t addr, uint64_t size);
-        if (g_heal_tex) { g_heal_tex = 0; backend_pool_written(0x7000000000ull, 0x320000000ull); }
-    }
-    g_last_presented = t;
-    TexBackend *b = vk_tex(t, true);
-    b->presented = true;
-    vk_end_pass();
+// One image into the window: b (the game's presented texture, or one exec.c kept: vk_interp_keep), the overlay menu,
+// the test shots. frame: the present it belongs to (the count when it was made); image / nimg: which of its images.
+static void present_image(TexBackend *b, bool final, int image, int nimg, uint64_t frame) {
     static const float black[4] = {0, 0, 0, 1};
+    vk_end_pass();  // (a scheduled image comes between the next frame's lists: their pass begins again after it)
     uint64_t t0 = SDL_GetTicksNS();
-    // Frame interpolation (60 fps, exec.c vk_interp_render): the in-between image now, this frame's own half a frame
-    // later (the period: the game's present rhythm, smoothed).
-    TexBackend *hold = NULL;
-    extern bool vk_interp_render(TexBackend *b, TexBackend **hold);
-    bool two = vk_interp_render(b, &hold);
-    static uint64_t last_present, period = 33333333;
-    if (last_present && t0 - last_present > 5000000 && t0 - last_present < 100000000) period = (period * 7 + (t0 - last_present)) / 8;
-    last_present = t0;
-    {   // 60 fps mode: a menu's frames come every 33.3 ms, but the smoothed period still holds the world's 16.7 ms for its
-        // first frames - the second image would come too early
-        extern bool fps60_menu(void);
-        if (fps60_menu()) period = 33333333;
-    }
-    for (int image = two ? 0 : 1; image < 2; image++) {
-    bool final = image == 1;
-    if (final && two) {
-        uint64_t due = t0 + period / 2, now = SDL_GetTicksNS();
-        if (due > now) SDL_DelayPrecise(due - now);
-        b = hold;
-    }
     bool have = vk_frame_begin(black);
     uint64_t nd = SDL_GetTicksNS() - t0;
     if (nd > 30000000) {
@@ -737,15 +575,15 @@ void backend_present(NvnTexture *t) {
         // (0: show everything).
         static long hide = -1;
         if (hide < 0) hide = getenv("LARECOMP_HIDE_FIRST_FRAMES") ? atol(getenv("LARECOMP_HIDE_FIRST_FRAMES")) : 2;
-        if ((long)total_frames >= hide) vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
+        if ((long)frame >= hide) vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv);
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("LARECOMP_MENU_AT") ? atol(getenv("LARECOMP_MENU_AT")) : 0;
-        if (final && menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
+        if (final && menu_at && (long)frame + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("LARECOMP_WINDOW_SHOT") ? atol(getenv("LARECOMP_WINDOW_SHOT")) : 0;
         // (the in-between image: build/window_mid.png, with interpolation on)
-        bool shot = win_shot && (long)total_frames + 1 == win_shot;
+        bool shot = win_shot && (long)frame + 1 == win_shot;
         // LARECOMP_WINDOW_SHOTS=<n>,<n>,...: the in-between image and the frame of each, build/frames/{mid,fin}_<n>.png
         static long list[512]; static int nlist = -1;
         if (nlist < 0) {
@@ -757,20 +595,106 @@ void backend_present(NvnTexture *t) {
         extern long fps60_scene_start(void);
         static bool rel_list = false;
         { static bool init; if (!init) { init = true; rel_list = getenv("LARECOMP_WINDOW_SHOTS_REL") != NULL; } }
-        const char *path = shot ? (final ? "build/window.png" : "build/window_mid.png") : NULL;
+        // (k > 2: the in-between images are mid1 .. mid<k-1>)
+        char mid[16];
+        if (nimg > 2) snprintf(mid, sizeof mid, "mid%d", image + 1);
+        else snprintf(mid, sizeof mid, "mid");
+        static char wpath[64];
+        snprintf(wpath, sizeof wpath, "build/window_%s.png", mid);
+        const char *path = shot ? (final ? "build/window.png" : wpath) : NULL;
         for (int i = 0; i < nlist; i++)
-            if (rel_list ? (fps60_scene_start() >= 0 && (long)total_frames + 1 - fps60_scene_start() == list[i])
-                         : (long)total_frames + 1 == list[i]) {
+            if (rel_list ? (fps60_scene_start() >= 0 && (long)frame + 1 - fps60_scene_start() == list[i])
+                         : (long)frame + 1 == list[i]) {
                 mkdir("build/frames", 0755);
-                snprintf(lpath, sizeof lpath, "build/frames/%s_%ld.png", final ? "fin" : "mid", list[i]);
+                snprintf(lpath, sizeof lpath, "build/frames/%s_%ld.png", final ? "fin" : mid, list[i]);
                 path = lpath;
             }
         vk_frame_end(path);
+        g_window_images++;
         if (final && shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else {
         renderer_submit();
     }
+}
+
+// ---- the images of a present, on schedule
+// With frame interpolation a present has k images (exec.c vk_interp_*): the k - 1 in-between ones, rendered and kept
+// at once (the next frame's recording clears what they are made of), then frame N's own, a k-th of the period apart.
+// The first is shown at once and the others wait here: the render thread shows them when they are due, between the
+// next frame's jobs or while it has none (renderthread.c), so the game goes on meanwhile; without it this thread waits.
+typedef struct { TexBackend *b; bool final; int image, nimg; uint64_t frame, due; } Pending;
+static Pending pend[16];
+static int pend_n;
+
+// The scheduled images due by now (all: every one, now - the next present's must not come before them)
+void vk_pending_run(bool all) {
+    while (pend_n) {
+        if (!all && pend[0].due > SDL_GetTicksNS()) return;
+        Pending p = pend[0];
+        memmove(pend, pend + 1, (size_t)--pend_n * sizeof *pend);
+        present_image(p.b, p.final, p.image, p.nimg, p.frame);
     }
+}
+
+void vk_pending_drop(void) { pend_n = 0; }  // (a reboot: renderthread.c rt_reset, the render thread stopped)
+
+// When the next scheduled image is due (false: none)
+bool vk_pending_next(uint64_t *due) {
+    if (!pend_n) return false;
+    *due = pend[0].due;
+    return true;
+}
+
+// Without the render thread: wait for the scheduled images and show them
+static void pending_wait_all(void) {
+    while (pend_n) {
+        uint64_t now = SDL_GetTicksNS();
+        if (pend[0].due > now) SDL_DelayPrecise(pend[0].due - now);
+        vk_pending_run(false);
+    }
+}
+
+void backend_present(NvnTexture *t) {
+    {   // (LARECOMP_HEAL_KEYS research key F5: every texture re-checks its memory)
+        extern volatile int g_heal_tex;
+        extern void backend_pool_written(uint64_t addr, uint64_t size);
+        if (g_heal_tex) { g_heal_tex = 0; backend_pool_written(0x7000000000ull, 0x320000000ull); }
+    }
+    vk_pending_run(true);  // (the last present's images still waiting: before this one's, whose replays reuse their slots)
+    g_last_presented = t;
+    TexBackend *b = vk_tex(t, true);
+    b->presented = true;
+    vk_end_pass();
+    uint64_t t0 = SDL_GetTicksNS();
+    static uint64_t last_present, period = 33333333;
+    if (last_present && t0 - last_present > 5000000 && t0 - last_present < 100000000) period = (period * 7 + (t0 - last_present)) / 8;
+    last_present = t0;
+    {   // 60 fps mode: a menu's frames come every 33.3 ms, but the smoothed period still holds the world's 16.7 ms for its
+        // first frames - the second image would come too early
+        extern bool fps60_menu(void);
+        if (fps60_menu()) period = 33333333;
+    }
+    // Frame interpolation (exec.c vk_interp_begin): k images per present (vk_interp_mult, from the period)
+    TexBackend *hold = NULL;
+    extern bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period);
+    extern void vk_interp_replay(float t);
+    extern TexBackend *vk_interp_keep(TexBackend *b, int slot);
+    extern void vk_interp_end(void);
+    extern int vk_interp_images(void);
+    bool inter = vk_interp_begin(b, &hold, period);
+    int nimg = inter ? vk_interp_images() : 1;
+    for (int image = 0; image < nimg && pend_n < 16; image++) {
+        bool final = image == nimg - 1;
+        TexBackend *img = final ? (inter ? hold : b) : NULL;
+        if (!final) {  // (rendered into the game's textures, then kept: the next replay writes them again)
+            vk_interp_replay((float)(image + 1) / (float)nimg);
+            img = vk_interp_keep(b, image);
+        }
+        pend[pend_n++] = (Pending){img, final, image, nimg, total_frames, t0 + period * (uint64_t)image / (uint64_t)nimg};
+        vk_pending_run(false);  // (the first at once; the others if their replays took past their time)
+    }
+    vk_interp_end();
+    if (!rt_active()) pending_wait_all();
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
     frames++;
@@ -799,15 +723,12 @@ void backend_present(NvnTexture *t) {
             if (exit_at && (long)total_frames >= exit_at) { LOG("[vk] exit at present %llu\n", (unsigned long long)total_frames); fflush(csv); fflush(stderr); _exit(0); }
         }
     }
-    {   // LARECOMP_FG_TOGGLE_AT=<frame>,...: frame generation on / off at those presents, as the F12 menu does (tests of
-        // the switch between AMD's swapchain and the driver's)
-        const char *e = getenv("LARECOMP_FG_TOGGLE_AT");
+    {   // LARECOMP_FG_AT=<present>:<k>,...: frame generation set to k (0, 2, 3, 4) at those presents, as the F12 menu does
+        const char *e = getenv("LARECOMP_FG_AT");
         for (const char *p = e; p && *p;) {
             long at = strtol(p, (char **)&p, 10);
-            if (at == (long)total_frames) {
-                g_settings.frame_gen = g_settings.frame_gen ? 0 : 2;
-                LOG("[vk] frame generation %s (LARECOMP_FG_TOGGLE_AT)\n", g_settings.frame_gen ? "on" : "off");
-            }
+            int k = *p == ':' ? (int)strtol(p + 1, (char **)&p, 10) : 0;
+            if (at == (long)total_frames) { g_settings.frame_gen = k >= 2 && k <= 4 ? k : 0; LOG("[vk] frame generation %d (LARECOMP_FG_AT)\n", k); }
             if (*p == ',') p++; else break;
         }
     }
@@ -904,11 +825,10 @@ void backend_present(NvnTexture *t) {
     if (prev_present > 0 && now - prev_present > max_gap) max_gap = now - prev_present;
     prev_present = now;
     if (now - last_fps_time >= fps_iv) {
-        static uint64_t sc_prev;  // (AMD's swapchain: what reached the window, generated frames included)
-        uint64_t sc_now = fsr3_sc_present_count();
-        if (last_fps_time > 0 && g_vk.ffx_sc)
-            LOG("[vk] t=%.1f window %.1f fps (AMD swapchain)\n", now, (double)(sc_now - sc_prev) / (now - last_fps_time));
-        sc_prev = sc_now;
+        static uint64_t img_prev;  // (the images that reached the window: with frame interpolation, k per frame)
+        if (last_fps_time > 0 && g_window_images - img_prev != frames)
+            LOG("[vk] t=%.1f window %.1f fps\n", now, (double)(g_window_images - img_prev) / (now - last_fps_time));
+        img_prev = g_window_images;
         if (last_fps_time > 0)
             LOG("[vk] t=%.1f frame %llu %.1f fps max %.0fms (%s)\n", now, (unsigned long long)total_frames,
                 frames / (now - last_fps_time), max_gap * 1000.0, renderer_stats());
@@ -929,7 +849,6 @@ static void quick_exit_handler(void) {
     if (trace < 0) trace = getenv("LARECOMP_VK_TRACE") != NULL;
     if (trace) LOG("[vk] exit: waiting for the GPU\n");
     if (g_vk.dev) {
-        fsr3_sc_wait_presents();
         vkDeviceWaitIdle(g_vk.dev);
         if (trace) LOG("[vk] exit: saving the pipeline cache\n");
         vk_pipeline_cache_save();

@@ -835,37 +835,6 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(max(d.r, max(d.g, d.b)) > 2.0 / 255.0 ? 1.0 : 0.0);\n"
                "}\n";
     }
-    // Frame generation's image without the interface (exec.c post_process): FSR 3's output (t0) where the interface
-    // mask (t2) is clear, and the image from before the interface (t1, at the render size) where it is not.
-    // b.xy = 1 / the output's size.
-    if (!strcmp(name, "hudless.frag")) {
-        *stage = STAGE_FRAGMENT;
-        return "#version 450\n"
-               "layout(set = 0, binding = 0) uniform sampler2D t0;\n"
-               "layout(set = 0, binding = 1) uniform sampler2D t1;\n"
-               "layout(set = 0, binding = 2) uniform sampler2D t2;\n"
-               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
-               "layout(location = 0) out vec4 o;\n"
-               "void main() {\n"
-               "  vec2 uv = gl_FragCoord.xy * pc.b.xy;\n"
-               "  o = vec4(texture(t2, uv).r > 0.0 ? texture(t1, uv).rgb : texture(t0, uv).rgb, 1.0);\n"
-               "}\n";
-    }
-    // An image upside down, its .y times a.x (exec.c post_process: frame generation's depth and motion vectors in the
-    // window's orientation - the present flips the game image when its origin is the lower left)
-    if (!strcmp(name, "flip_y.frag")) {
-        *stage = STAGE_FRAGMENT;
-        return "#version 450\n"
-               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
-               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
-               "layout(location = 0) out vec4 o;\n"
-               "void main() {\n"
-               "  ivec2 sz = textureSize(t, 0), p = ivec2(gl_FragCoord.xy);\n"
-               "  vec4 v = texelFetch(t, ivec2(p.x, sz.y - 1 - p.y), 0);\n"
-               "  v.y *= pc.a.x;\n"
-               "  o = v;\n"
-               "}\n";
-    }
     // The scene depth as R32F (FSR 3 reads a colour image: exec.c post_process)
     if (!strcmp(name, "depth_r32.frag")) {
         *stage = STAGE_FRAGMENT;
@@ -873,6 +842,55 @@ static const char *builtin_src(const char *name, int *stage) {
                "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
                "layout(location = 0) out vec4 o;\n"
                "void main() { o = vec4(texelFetch(dep, ivec2(gl_FragCoord.xy), 0).r); }\n";
+    }
+    // N's result moved to an in-between image (exec.c, frame interpolation: its SSAO / GI are N's, taken where its
+    // motion vectors - relative to N - say each pixel was): src at uv - velocity (uv itself off the image).
+    // b.xy = 1 / the output's size.
+    if (!strcmp(name, "reproject.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D src;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D mv;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec2 uv = gl_FragCoord.xy * pc.b.xy;\n"
+               "  ivec2 ms = textureSize(mv, 0);\n"
+               "  vec2 puv = uv - texelFetch(mv, min(ivec2(uv * vec2(ms)), ms - 1), 0).xy;\n"
+               "  if (any(lessThan(puv, vec2(0.0))) || any(greaterThanEqual(puv, vec2(1.0)))) puv = uv;\n"
+               "  o = texture(src, puv);\n"
+               "}\n";
+    }
+    // An in-between image with FSR 3.1 (exec.c post_process, frame interpolation): FSR's own history goes forward in time
+    // with the real frames, so the image is resolved here instead, like TAA - t = the image (render size, after the
+    // colour pass), h = N's FSR 3.1 output (the output's size), taken where the motion vectors (relative to N) say each
+    // pixel was and clipped to t's 3x3 (YCoCg min / max), mixed with t by the history weight. Uncovered or off-image: t.
+    // a.xy = 1 / the output's size, a.zw = 1 / t's size, b.x = the history's weight.
+    if (!strcmp(name, "side_resolve.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D h;\n"
+               "layout(set = 0, binding = 2) uniform sampler2D mv;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "vec3 ycc(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }\n"
+               "vec3 rgb(vec3 y) { return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }\n"
+               "void main() {\n"
+               "  vec2 uv = gl_FragCoord.xy * pc.a.xy;\n"
+               "  vec3 c = texture(t, uv).rgb;\n"
+               "  vec3 mn = vec3(1e9), mx = vec3(-1e9);\n"
+               "  for (int y = -1; y <= 1; y++)\n"
+               "    for (int x = -1; x <= 1; x++) {\n"
+               "      vec3 s = ycc(texture(t, uv + vec2(x, y) * pc.a.zw).rgb);\n"
+               "      mn = min(mn, s); mx = max(mx, s);\n"
+               "    }\n"
+               "  ivec2 ms = textureSize(mv, 0);\n"
+               "  vec2 puv = uv - texelFetch(mv, min(ivec2(uv * vec2(ms)), ms - 1), 0).xy;\n"
+               "  if (any(lessThan(puv, vec2(0.0))) || any(greaterThanEqual(puv, vec2(1.0)))) { o = vec4(c, 1.0); return; }\n"
+               "  vec3 hc = rgb(clamp(ycc(texture(h, puv).rgb), mn, mx));\n"
+               "  o = vec4(mix(c, hc, pc.b.x), 1.0);\n"
+               "}\n";
     }
     // A post image back into a target (b.xy = 1 / the output's size; sampled, the sizes may differ): TAA's result into
     // the game's scene

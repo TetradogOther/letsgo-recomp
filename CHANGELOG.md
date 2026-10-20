@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- **Frame generation on any GPU: Off / 2x / 3x / 4x** (F12 menu, `frame_gen = 0 / 2 / 3 / 4`; replaces FSR 3.1's,
+  which needed FSR 3.1 anti-aliasing and had only 2x on Vulkan): k - 1 in-between images per frame, drawn by running
+  the frame's draws again with their constants (camera, objects, bones) blended between the last frame's and this
+  one's - the 60 fps mode's in-between image for menus, generalised. The multiplier is of the world's rate (60 fps x 4 =
+  240): a menu or a battle at the game's 30 gets twice the images, and the window keeps the same rate. The in-between
+  images are rendered and kept at once, the first shown at once and the others on schedule by the render thread between
+  the next frame's jobs, so the game is not held up (with the images presented from the game thread, 60 x 4 slowed it to
+  ~33 fps); the game then runs one present ahead instead of two (with two it rewrote the command lists being replayed).
+  Each draw is paired with the previous frame's occurrence with the closest constants, not the one at its place in the
+  draw order - that order shifts when a copy of a repeated mesh (flower bushes, grass) is culled, and the in-between
+  images mixed bushes with their neighbours (the defect that took interpolation out of the world before). Measured at
+  real speed (Pallet Town, RTX 5070 Ti, 240 Hz): 30 fps x 2 / 3 / 4 = 60 / 90 / 120 images a second, 60 x 4 = 240 (also
+  with FSR 3.1, SSAO and GI high) and 240 in the menus, the game at its own speed; ~2.6-3 ms per in-between image;
+  9000 turbo frames (26000 replays) without a fault. Not yet: the interface and particles stay at the game's rate; one
+  frame of latency more. `LARECOMP_INTERP_MULT=<k>` fixes k (research).
+  - **The in-between images are side images**: they read N's temporal state and leave it as it was, and the real
+    frames chain N-1, N, N+1 by their own count. Counted as frames of their own (rendered after N, but before it in
+    time) they ran every history back and forth: the GI's and SSAO's accumulation shimmered in blotches, TAA and FSR
+    3.1 got the past after the future, and the jitter sequence skipped phases (half of FSR's eight at 2x). Now: their
+    SSAO / GI are N's, moved by their motion vectors (relative to N) instead of computed again; TAA reads N's history and
+    writes apart; with FSR 3.1 they are resolved against N's FSR output like TAA (FSR's history is the real frames'
+    alone); the camera and the per-object vectors are relative to N; the jitter has a sequence for each. Static camera,
+    4K, FSR 3.1: the step real -> in-between -> real went from 0.49 / 0.20 (out and back) to 0.35 / 0.35, as real ->
+    real (0.31).
+  - **k from the game's state, not the measured period**: a frame the GPU could not finish in time came later and got
+    more images (4 instead of 2 in the world at 60), and was slower still - at 4K the game sank to ~30 fps with 2x.
+    Now k = frame_gen x the world's rate / the frame's rate as the 60 fps mode means it (fps60_period_ns).
+  - The kept images are copied raw only when nothing processed them (a 4K copy per image saved).
+  - 4K, RTX 5070 Ti, the world at 60 with SSAO medium and GI high: FSR 3.1 native 2x 60 fps / 120 images (before: ~30
+    / 120), native 3x ~48 / ~145, Quality 3x 60 / 180, Quality 4x ~55 / ~220.
+- **FSR 3.1 frame generation and AMD's swapchain removed**: the swapchain is the driver's again, the device has no extra
+  queues, and `ffx_swapchain` is gone (FSR 3.1 upscaling stays).
 - **Skip controller selection** (launcher, `skip_controller = 1` in `larecomp.ini`; off by default; Eevee and Pikachu
   1.0.0): the game starts at the Game Freak logo with the controller already chosen, without "Press a button on the
   controller you want to use" and its confirmation - no button is pressed for it. The start sequence's controller
@@ -9,18 +41,18 @@
   0; it is turned to 0 before its first run, and finds the runtime's one controller (handheld) as player 0's. Only the
   first time per boot: when a controller is lost while playing, the game still asks. Checked on both games: no
   controller screen, the title takes A and the world the stick; with the option off the screen is there as before.
-- **Fixes the ghosting on the player's left eye with FSR 3.1, TAA and frame generation**: per-object motion vectors pair
+- **Fixes the ghosting on the player's left eye with FSR 3.1 and TAA**: per-object motion vectors pair
   a draw with its previous frame's by a key over its arguments, and that key read one word past them - two of the
   call's float registers, leftovers that alternated from frame to frame for the eye. It never found its previous
   constants, took the camera's vector (none for a walking character) and was smeared behind the face. Three other
   draw groups were missed every frame the same way (an NPC's part, the hedge by the fence, a ground decal). The key
   now takes the draw's own arguments only (7 for indexed draws, 5 for arrays); the 60 fps in-between image's draw
   signature too. Pallet Town, 100 frames: 512 misses -> 7.
-- **Fixes flowers and grass smeared by frame generation (and FSR 3.1 / TAA) while the camera moves**: a mesh drawn many
+- **Fixes flowers and grass smeared by FSR 3.1 and TAA while the camera moves**: a mesh drawn many
   times without a game object of its own (the flower bushes, the grass) was paired with the previous frame by the order
   of its draws, and that order shifts by one whenever a copy is culled or comes into view: each bush then took a
-  neighbour's previous constants and a vector towards it - the generated frames showed flower beds in blocks and
-  pieces of them floating beside. Of the previous frame's copies of the same draw, the one with the closest constants
+  neighbour's previous constants and a vector towards it (FSR 3.1's frame generation showed flower beds in blocks and
+  pieces of them floating beside). Of the previous frame's copies of the same draw, the one with the closest constants
   is now taken. Pallet Town, walking with the camera moving, the frame where a bush leaves the view: reprojection error
   on the flower bed 4.99 -> 1.76 (pixels off by more than 40: 2187 -> 375); jump rejections over the run 196 -> 84;
   no change in speed.
@@ -40,49 +72,23 @@
   is written before its address, for threads looking it up meanwhile). The start screen's 60 fps box keeps 120 when on.
   `larecomp.ini`: `fps = 120`.
   - The player walked slower the higher the rate (85 % / 53 %): fixed, see "Fixes walking speed" above.
-- **Fixes the extreme ghosting of frame generation on vertical motion**: the present turns the game image upside down
-  (its origin is the lower left), and frame generation works on the window image - but it was given the depth and the
-  motion vectors the right way up. Sideways the two agree; up and down every vector pointed the wrong way, and the
-  generated frame doubled the whole scene vertically while walking up or down. Frame generation now gets them flipped
-  (the vectors' y and the jitter's negated). Checked on the generated frames alone, captured from the desktop while
-  walking down through Pallet Town (`tools/fg_walk.sh`). The F12 menu's frame generation is Off / 2x only now.
-- The post passes' pipeline cache had 16 entries for about 30 passes: with FSR 3.1, frame generation, SSAO and GI on,
-  some pipelines were made again every frame. 64 now.
+- The post passes' pipeline cache had 16 entries for about 30 passes: with FSR 3.1, SSAO and GI on, some
+  pipelines were made again every frame. 64 now.
 - **F12 menu reorganised**:
   - **Anti-aliasing**: Off / SMAA / TAA / FSR 3.1. FSR 3.1 is the last choice instead of an upscaler of its own (with
     its mode below it); with any other choice a lower render resolution is scaled bilinearly (FSR 1 is gone from the
     menu; it stays as the fallback when FSR 3.1's DLL is missing). `larecomp.ini`: `aa = fsr3`; an older
     `upscaler = fsr3` reads as it.
-  - **Frame generation**: Off / 2x, with FSR 3.1 anti-aliasing, switched live (AMD's swapchain is made or dropped at the
-    next frame; its queues are now created with the device whenever the DLL is there). FSR 3.1 generates one frame
-    between two (several is FSR 4's, DirectX 12 only). `frame_gen = 2`.
   - **SSAO and GI**: quality levels Off (default) / Low / Medium / High instead of a box, and their parameters are gone
     from the advanced page (its debug views stay, under Debug). High is what they had before. SSAO: 16 / 12 / 8 samples
     (the shader takes the count now). GI: 4 rays x 8 steps at half the scene's size / 3 x 6 at half / 2 x 6 at a third.
     The strength, reach and accumulation are the same at every level. 720p, RTX 5070 Ti, both on: +0.21 / +0.19 / +0.17
     ms. `ssao_level`, `gi_level` (0-3); an older `ssao = 1` / `gi = 1` reads as high.
-- **FSR 3.1 frame generation** (`frame_gen = 1` in `larecomp.ini`, off by default; with the FSR 3.1 upscaler; read when
-  the game starts): AMD FidelityFX generates a frame between each two of the game's, on the swapchain below. At
-  `fps = 60` the window gets 120 images a second while playing, and 60 in menus and cutscenes (where the game runs at
-  30); the game's own in-between image of the 60 fps mode is off then. Interface excluded: the window image without the
-  interface (FSR 3's output where the interface mask is clear, the scene from before the interface where it is not) is
-  handed over each frame as FidelityFX's "HUD-less" image, so the interface is taken from the real frame and not warped.
-  The depth, the motion vectors and the jitter are FSR 3.1's. Where FSR 3.1 does not run (2D screens without the 3D
-  scene), no frame is generated. AMD's presenter thread keeps only the latest frame; two dropped in a row stalled the
-  GPU for good (1 run in 3 of the scripted turbo test, after a slow frame), so a present now waits until the presenter
-  has made one since the frame before (at most 100 ms; 18 turbo runs without a stall since).
 - **Fixes FSR 3.1's interface mask while playing**: the mask (the pixels the interface draws, which FSR 3.1 treats
   apart) was taken only from draws into the presented image, but while playing the game draws its interface at the
   render size into the image its last pass grades into the presented one - and the 2x interface images and the
   high-resolution text read as the scene's (scaled) images. Now the copy is made of that image, and only a scaled render
   target counts as the scene's.
-- **AMD FidelityFX swapchain, the first step towards frame generation** (`ffx_swapchain = 1` in `larecomp.ini`, off by
-  default; read when the game starts): the window's swapchain is FidelityFX's (SDK 1.1.4, the same signed
-  `amd_fidelityfx_vk.dll` as FSR 3.1). The game draws into FidelityFX's images and FidelityFX copies them into the real
-  swapchain on a present queue of its own. No frame is generated yet. The device gets three more queues for it
-  (present, image acquire, async compute; RTX 5070 Ti: families 0, 1 and 2). Without a free queue or the DLL, the
-  driver's swapchain is used as before. Tested in Pallet Town at 30 and 60 fps with FSR 3.1, TAA, SSAO and GI, and in
-  full screen at 4K (the swapchain made again): same images, same frame pacing.
 
 ## 0.4.1 (2026-10-19)
 

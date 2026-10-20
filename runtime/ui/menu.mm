@@ -469,7 +469,6 @@ static float cfg_label_x(const char *const *labels, int n) {
     return w + ImGui::GetStyle().WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;
 }
 
-extern "C" bool vk_fg_available(void);  // (runtime/nvn/vulkan/device.c: AMD's swapchain can be made)
 
 // Advanced settings (the "Advanced..." button): the image's colour, TAA / FSR 3.1 sharpness, the motion vectors and
 // the debug views (SSAO and GI have quality levels on the main page instead of parameters: settings_apply_levels)
@@ -601,20 +600,19 @@ static void cfg_draw(ImGuiIO &io, float scale) {
             cfg_row(labels[4], x);
             ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
         }
-        // FSR 3.1 frame generation (exec.c vk_fg_present; AMD's swapchain is switched to at the next frame: device.c). FSR
-        // 3.1 makes one frame between two (several is FSR 4's, which has no Vulkan version): off or 2x.
+        // Frame generation (exec.c frame interpolation): 2, 3 or 4 images per world frame, the in-between ones drawn by
+        // running the frame's draws again with their positions between the last frame's and this one's. Any GPU.
         {
-            bool can = g_settings.antialias == AA_FSR3 && vk_fg_available();
-            const char *fg[] = {M("Off", "Desligado", "Выкл."), "2x"};
-            int cur = can && g_settings.frame_gen == 2 ? 1 : 0;
+            const char *fg[] = {M("Off", "Desligado", "Выкл."), "2x", "3x", "4x"};
+            int cur = g_settings.frame_gen >= 2 && g_settings.frame_gen <= 4 ? g_settings.frame_gen - 1 : 0;
             cfg_row(labels[3], x);
-            ImGui::BeginDisabled(!can);
-            if (ImGui::Combo("##fg", &cur, fg, 2)) g_settings.frame_gen = cur ? 2 : 0;
-            ImGui::EndDisabled();
-            if (!can) ImGui::SetItemTooltip("%s", vk_fg_available() ? M("With FSR 3.1 anti-aliasing", "Com o antisserrilhado FSR 3.1",
-                                                                        "Со сглаживанием FSR 3.1")
-                                                                    : M("amd_fidelityfx_vk.dll is missing", "Falta amd_fidelityfx_vk.dll",
-                                                                        "Нет amd_fidelityfx_vk.dll"));
+            if (ImGui::Combo("##fg", &cur, fg, 4)) g_settings.frame_gen = cur ? cur + 1 : 0;
+            ImGui::SetItemTooltip("%s", M("Images per frame of the world (60 fps x 2 = 120). Each extra image costs about as much "
+                                          "as drawing the scene again, and the window shows the game one frame later.",
+                                          "Imagens por quadro do mundo (60 fps x 2 = 120). Cada imagem a mais custa quase o mesmo "
+                                          "que desenhar a cena de novo, e a janela mostra o jogo um quadro depois.",
+                                          "Кадров на кадр мира (60 fps x 2 = 120). Каждый дополнительный кадр стоит почти как "
+                                          "повторная отрисовка сцены, а окно показывает игру на кадр позже."));
         }
         settings_apply_levels();
         settings_clamp_color();
