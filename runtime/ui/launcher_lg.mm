@@ -1,14 +1,15 @@
-// Let's Go Recomp start screen, in tabs: Game (the game files - picked once, set up and recompiled here:
+// Let's Go Recomp start screen: a launcher's window (no system frame, taller than wide) with a sidebar - the project's
+// icon, the pages, Play - and the page beside it: Game (the game files - picked once, set up and recompiled here:
 // runtime/gamesetup.c - and the game options), Graphics (the window, then the F12 menu's graphics page:
 // runtime/ui/settings_ui.mm), Image and sound (the same as the F12 menu's), Controls (keyboard / mouse) and Mods
-// (mods/: game files replaced, a translation for one; installed from a downloaded file: runtime/mods.c); Play below
-// them. The look is the F12 menu's. In English, or in Portuguese when the system's language is (LARECOMP_LANG=en|pt
+// (mods/: game files replaced, a translation for one; installed from a downloaded file: runtime/mods.c). The look is
+// the F12 menu's. In English, or in Portuguese when the system's language is (LARECOMP_LANG=en|pt
 // chooses; the shared pages speak Russian too). The choices go to larecomp.ini (settings.c; bind_key_* from
 // runtime/hle/bindings.c).
 // Tests: LARECOMP_LAUNCHER_SHOT=<frame> saves build/launcher.png (or LARECOMP_SHOT_PATH) and exits;
-// LARECOMP_LAUNCHER_TAB=<n> opens that tab; LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
+// LARECOMP_LAUNCHER_TAB=<n> opens that page; LARECOMP_LAUNCHER_AUTOPLAY=1 plays as soon as the game files are ready; LARECOMP_SETUP_DIR=<folder> sets them up
 // from that folder at once; LARECOMP_MOD_INSTALL=<file or folder> installs a mod at once;
-// LARECOMP_LAUNCHER_KEYS=1 opens the Controls tab, =<slot> also waits for a new key for that input
+// LARECOMP_LAUNCHER_KEYS=1 opens the Controls page, =<slot> also waits for a new key for that input
 // (runtime/input_bind.h BIND_*), and <slot>:<key name> presses that key for it.
 #include <SDL3/SDL.h>
 #include <float.h>
@@ -78,9 +79,12 @@ static void keys_section(void) {
     bind_capture_active(&cap_dev, &cap_slot, &ms_left);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2));
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 1));
-    if (ImGui::BeginTable("##keys", 4, ImGuiTableFlags_SizingStretchProp)) {
-        for (int c = 0; c < 4; c++) ImGui::TableSetupColumn(NULL, c & 1 ? ImGuiTableColumnFlags_WidthStretch : ImGuiTableColumnFlags_WidthFixed);
-        for (size_t i = 0; i < sizeof k_actions / sizeof k_actions[0]; i++) {
+    if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn(NULL, ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn(NULL, ImGuiTableColumnFlags_WidthStretch);
+        const size_t n = sizeof k_actions / sizeof k_actions[0];
+        for (size_t k = 0; k < n; k++) {
+            size_t i = k < n / 2 ? k * 2 : (k - n / 2) * 2 + 1;  // (the table lists them in pairs: the moves, then the buttons)
             int slot = k_actions[i].slot;
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
@@ -106,10 +110,12 @@ static void keys_section(void) {
         ImGui::TextDisabled("%s", T("Press the new key. Esc cancels; a key already in use swaps over.",
                                     "Aperte a nova tecla. Esc cancela; uma tecla já usada troca de lugar."));
     if (!bind_is_default(BIND_DEV_KEY) && ImGui::Button(T("Restore default keys", "Restaurar teclas padrão"))) bind_reset(BIND_DEV_KEY);
+    ImGui::PushTextWrapPos(0);
     ImGui::TextUnformatted(T("Mouse while aiming a Poké Ball: move = aim, left = throw.",
                              "Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar."));
     ImGui::TextUnformatted(T("Otherwise: left = touch screen (Play with your partner). Right = B.",
                              "Fora dela: esquerdo = tocar na tela (Brincar com o parceiro). Direito = B."));
+    ImGui::PopTextWrapPos();
     const char *sl[] = {T("Mouse sensitivity", "Sensibilidade do mouse"), T("Controller stick dead zone", "Zona morta do analógico")};
     float x = ui_label_x(sl, 2);
     ui_row(sl[0], x);
@@ -339,6 +345,80 @@ static void mods_section(SDL_Window *win, int inst) {
                                                                             "Esse arquivo não tem mod para este jogo (nenhuma pasta romfs)."));
 }
 
+// ------------------------------------------------------------------ the launcher's window
+// A launcher's own window while the start screen is up: no system frame (dragged by its top strip; its own minimize and
+// close buttons), taller than wide, in the middle of the screen. Play gives the game its window back: the frame, the
+// size it had (1280 x 720, or LARECOMP_WINDOW) and full screen when that setting is on.
+static float g_drag_h, g_buttons_w;  // (logical pixels: the strip that drags the window, the buttons at its right end)
+static SDL_HitTestResult SDLCALL launcher_hit(SDL_Window *win, const SDL_Point *pt, void *) {
+    int w = 0, h = 0;
+    SDL_GetWindowSize(win, &w, &h);
+    return pt->y < g_drag_h && pt->x < w - g_buttons_w ? SDL_HITTEST_DRAGGABLE : SDL_HITTEST_NORMAL;
+}
+static int g_game_w = 1280, g_game_h = 720;
+static void window_as_launcher(SDL_Window *win) {
+    int w, h;
+    SDL_GetWindowSize(win, &w, &h);
+    if (!(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN) && w > 0 && h > 0 && !getenv("LARECOMP_LAUNCHER_SHOT")) g_game_w = w, g_game_h = h;
+    if (getenv("LARECOMP_WINDOW")) sscanf(getenv("LARECOMP_WINDOW"), "%dx%d", &g_game_w, &g_game_h);
+    SDL_SetWindowFullscreen(win, false);
+    SDL_Rect usable = {0, 0, 1920, 1040};
+    SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(win), &usable);
+    int lh = usable.h * 86 / 100 < 900 ? usable.h * 86 / 100 : 900, lw = lh * 86 / 100;
+    SDL_SetWindowBordered(win, false);
+    SDL_SetWindowResizable(win, false);
+    SDL_SetWindowSize(win, lw, lh);
+    SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_SetWindowHitTest(win, launcher_hit, NULL);
+}
+static void window_as_game(SDL_Window *win) {
+    SDL_SetWindowHitTest(win, NULL, NULL);
+    SDL_SetWindowBordered(win, true);
+    SDL_SetWindowResizable(win, true);
+    SDL_SetWindowSize(win, g_game_w, g_game_h);
+    SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    if (g_settings.fullscreen && !getenv("LARECOMP_WINDOW") && !getenv("LARECOMP_HIDDEN")) SDL_SetWindowFullscreen(win, true);
+}
+
+// The project's icon (the Master Ball: icon.png beside the exe, or docs/icon), for the sidebar
+extern "C" uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);  // runtime/nvn/vulkan/imgui_glue.cpp
+static ImTextureID icon_texture(void) {
+    char p[1100];
+    if (!rt_resource("icon.png", "docs/icon/icon_1024.png", p, sizeof p)) return 0;
+    SDL_Surface *s = SDL_LoadPNG(p);
+    if (!s) return 0;
+    for (int size = s->w / 2; size >= 256; size /= 2) {  // (halved in steps: smooth at the size it is drawn)
+        SDL_Surface *t = SDL_ScaleSurface(s, size, size, SDL_SCALEMODE_LINEAR);
+        if (!t) break;
+        SDL_DestroySurface(s);
+        s = t;
+    }
+    SDL_Surface *rgba = SDL_ConvertSurface(s, SDL_PIXELFORMAT_ABGR8888);  // (R, G, B, A bytes in memory)
+    SDL_DestroySurface(s);
+    if (!rgba) return 0;
+    ImTextureID id = (ImTextureID)vk_imgui_texture_rgba(rgba->pixels, rgba->w, rgba->h);
+    SDL_DestroySurface(rgba);
+    return id;
+}
+
+// A window button in the top right corner (minimize: a line, close: an X), drawn so no font is needed
+static bool window_button(const char *id, bool close, float size) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    bool hit = ImGui::InvisibleButton(id, ImVec2(size, size));
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    if (ImGui::IsItemHovered())
+        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), close ? IM_COL32(196, 43, 28, 255) : IM_COL32(255, 255, 255, 30), size * 0.2f);
+    ImU32 col = IM_COL32(230, 228, 220, 255);
+    float m = size * 0.34f, t = size * 0.06f > 1 ? size * 0.06f : 1;
+    if (close) {
+        dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + size - m, p.y + size - m), col, t);
+        dl->AddLine(ImVec2(p.x + size - m, p.y + m), ImVec2(p.x + m, p.y + size - m), col, t);
+    } else {
+        dl->AddLine(ImVec2(p.x + m, p.y + size * 0.5f), ImVec2(p.x + size - m, p.y + size * 0.5f), col, t);
+    }
+    return hit;
+}
+
 // ------------------------------------------------------------------ the start screen
 extern "C" void launcher_lg_run(const char *root) {
     (void)root;
@@ -346,6 +426,7 @@ extern "C" void launcher_lg_run(const char *root) {
     g_pt = g_ui_lang == 1;
     ui_window_init();
     SDL_Window *win = ui_window();
+    window_as_launcher(win);
     ImGuiContext *prev_ctx = ImGui::GetCurrentContext();  // (the in-game menu's, when back here after a reboot)
     ImGuiContext *ctx = ImGui::CreateContext();
     ImGui::SetCurrentContext(ctx);
@@ -357,9 +438,10 @@ extern "C" void launcher_lg_run(const char *root) {
     UiScaler scaler;
     ImGui_ImplSDL3_InitForVulkan(win);
     vk_imgui_backend_init();
+    ImTextureID icon = icon_texture();
 
-    static const char *const res_en[] = {"Automatic (window size)", "720p", "1080p", "1440p", "4K"};
-    static const char *const res_pt[] = {"Automática (tamanho da janela)", "720p", "1080p", "1440p", "4K"};
+    static const char *const res_en[] = {"Automatic", "720p", "1080p", "1440p", "4K"};
+    static const char *const res_pt[] = {"Automática", "720p", "1080p", "1440p", "4K"};
     static const int res_lines[] = {0, 720, 1080, 1440, 2160};
     int res = 0;
     for (int i = 0; i < 5; i++) if (res_lines[i] == g_settings.res_height) res = i;
@@ -371,11 +453,12 @@ extern "C" void launcher_lg_run(const char *root) {
     const char *keys_test = getenv("LARECOMP_LAUNCHER_KEYS");
     enum { TAB_GAME, TAB_GRAPHICS, TAB_IMAGE, TAB_CONTROLS, TAB_MODS, NTABS };
     int tab = getenv("LARECOMP_LAUNCHER_TAB") ? atoi(getenv("LARECOMP_LAUNCHER_TAB")) : keys_test ? TAB_CONTROLS : TAB_GAME;
-    if (getenv("LARECOMP_LAUNCHER_TAB") || keys_test) ui_tab_select(tab);
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
     static const float bg[4] = {0.06f, 0.09f, 0.08f, 1};  // (the F12 menu's panel colour)
+    const ImVec4 side_bg(0.035f, 0.055f, 0.045f, 1), gold(0.79f, 0.64f, 0.29f, 1), gold_hover(0.88f, 0.72f, 0.34f, 1),
+        gold_text(0.17f, 0.13f, 0.03f, 1);
 
     while (!play) {
         menu_apply_window_requests(win);
@@ -418,82 +501,130 @@ extern "C" void launcher_lg_run(const char *root) {
         }
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
-        g_scale = ui_scale(scaler, io.DisplaySize.y);
+        // (the launcher is narrow: its fonts a little smaller than the F12 menu's at the same height)
+        g_scale = ui_scale(scaler, io.DisplaySize.y * 0.86f);
         ImGui::NewFrame();
-        // the whole window (not a panel inside it): the tabs change what is in it, Play stays at the bottom; the content
-        // in a column of up to 1150 px (at 1080) in the middle of a wide window
-        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(bg[0], bg[1], bg[2], 1));
-        ImGui::Begin("##launcher", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
-                                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar |
-                                             ImGuiWindowFlags_NoBringToFrontOnFocus);
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar();
-        {
-            float avail = ImGui::GetContentRegionAvail().x, colw = fminf(avail, 1150 * g_scale);
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - colw) * 0.5f);
-            ImGui::BeginChild("##column", ImVec2(colw, 0), ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoScrollbar);
-        }
-        ui_title(fonts.title, RT_APP_NAME);
-        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::CalcTextSize("v" RT_APP_VERSION).x);
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("v" RT_APP_VERSION);
-        // (the frame rate modes and these options hook game functions by address: builds without tables keep them off)
+        float s = g_scale;
         bool known = !setup_ready() || game_build("extracted/exefs") != GAME_BUILD_OTHER;
         const char *only = T("Only with version 1.0.0 (the base game) of Eevee or Pikachu for now.",
                              "Por enquanto só na versão 1.0.0 (o jogo base) do Eevee ou do Pikachu.");
-        float footer = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2 + ImGui::GetStyle().WindowPadding.y * 0.5f;
-        ui_tabs_begin(&tab, NTABS);
-        if (ImGui::BeginTabBar("##tabs")) {
-            const char *names[NTABS] = {T("Game", "Jogo"), T("Graphics", "Gráficos"), T("Image and sound", "Imagem e som"),
-                                        T("Controls", "Controles"), "Mods"};
+        const char *names[NTABS] = {T("Game", "Jogo"), T("Graphics", "Gráficos"), T("Image and sound", "Imagem e som"),
+                                    T("Controls", "Controles"), "Mods"};
+        ui_tabs_begin(&tab, NTABS);  // (L1 / R1 on a controller: the page before / after)
+
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(io.DisplaySize, ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(bg[0], bg[1], bg[2], 1));
+        ImGui::Begin("##launcher", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                             ImGuiWindowFlags_NoBringToFrontOnFocus);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+        float pad = 22 * s, side_w = 270 * s;
+        g_drag_h = 70 * s, g_buttons_w = 120 * s;
+
+        // ---- the sidebar: the icon and the name, the pages, Play
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, side_bg);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+        ImGui::BeginChild("##side", ImVec2(side_w, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_NoScrollbar);
+        {
+            float icon_sz = 72 * s;
+            if (icon) ImGui::Image(icon, ImVec2(icon_sz, icon_sz));
+            else ImGui::Dummy(ImVec2(icon_sz, icon_sz));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::Dummy(ImVec2(0, 4 * s));
+            ImGui::PushFont(fonts.title);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0));
+            ImGui::TextColored(UI_GOLD, "Let's Go");
+            ImGui::TextColored(UI_GOLD, "Recomp");
+            ImGui::PopStyleVar();
+            ImGui::PopFont();
+            ImGui::EndGroup();
+            const char *name = ready ? game_name("extracted/exefs") : NULL;
+            if (name) ImGui::TextDisabled("%s · v" RT_APP_VERSION, name);
+            else ImGui::TextDisabled("v" RT_APP_VERSION);
+            ImGui::Dummy(ImVec2(0, 14 * s));
+            ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
             for (int t = 0; t < NTABS; t++) {
-                if (!ui_tab(names[t], t, &tab)) continue;
-                ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
-                if (t == TAB_GAME) {
-                    game_files_section(win);
-                    ui_heading(T("Options", "Opções"));
-                    ImGui::BeginDisabled(!known);
-                    ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
-                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                        ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
-                                                                 "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
-                    ImGui::Checkbox(T("Skip controller selection", "Pular a escolha do controle"), &skipc);
-                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                        ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
-                                                                 "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
-                    ImGui::EndDisabled();
-                } else if (t == TAB_GRAPHICS) {
-                    const char *extra[] = {T("Render resolution", "Resolução de renderização")};
-                    float x = ui_graphics_x(extra, 1);
-                    ui_row(extra[0], x);
-                    ImGui::Combo("##res", &res, g_pt ? res_pt : res_en, 5);
-                    if (ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full)) SDL_SetWindowFullscreen(win, full);
-                    ImGui::Separator();
-                    ui_page_graphics(x, known);
-                    ui2x_section(ready, &ui2x_on);
-                } else if (t == TAB_IMAGE) {
-                    ui_page_image_sound();
-                } else if (t == TAB_CONTROLS) {
-                    keys_section();
-                } else {
-                    mods_section(win, inst);
-                }
-                ImGui::EndChild();
-                ImGui::EndTabItem();
+                char label[64];
+                snprintf(label, sizeof label, "  %s##nav%d", names[t], t);
+                if (ImGui::Selectable(label, tab == t, 0, ImVec2(0, 46 * s))) tab = t;
             }
-            ImGui::EndTabBar();
+            ImGui::PopStyleVar();
+            float play_h = 64 * s;
+            ImGui::SetCursorPosY(fmaxf(ImGui::GetCursorPosY(), ImGui::GetWindowHeight() - pad - play_h));
+            ImGui::PushStyleColor(ImGuiCol_Button, gold);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, gold_hover);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, gold_hover);
+            ImGui::PushStyleColor(ImGuiCol_Text, gold_text);
+            ImGui::PushFont(fonts.title);
+            ImGui::BeginDisabled(!ready);
+            if (frame == 0 && ready) ImGui::SetKeyboardFocusHere();
+            if (ImGui::Button(T("Play", "Jogar"), ImVec2(-FLT_MIN, play_h))) play = true;
+            ImGui::EndDisabled();
+            ImGui::PopFont();
+            ImGui::PopStyleColor(4);
+            if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", T("Set up the game files first (Game page).", "Configure os arquivos do jogo antes (página Jogo)."));
         }
-        ImGui::Separator();
-        ImGui::BeginDisabled(!ready);
-        if (frame == 0 && ready) ImGui::SetKeyboardFocusHere();
-        if (ImGui::Button(T("Play", "Jogar"), ImVec2(-FLT_MIN, 0))) play = true;
-        ImGui::EndDisabled();
-        if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", T("Set up the game files first (Game tab).", "Configure os arquivos do jogo antes (aba Jogo)."));
         ImGui::EndChild();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+
+        // ---- the page
+        ImGui::SameLine(0, 0);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad * 1.3f, pad));
+        ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                          ImGuiWindowFlags_NoScrollbar);
+        {
+            float bsz = 40 * s;
+            ImGui::PushFont(fonts.title);
+            ImGui::TextColored(UI_GOLD, "%s", names[tab]);
+            ImGui::PopFont();
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - bsz * 2 - ImGui::GetStyle().ItemSpacing.x * 0.5f);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() - pad * 0.5f);
+            if (window_button("##min", false, bsz)) SDL_MinimizeWindow(win);
+            ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.5f);
+            if (window_button("##close", true, bsz)) exit(0);
+            ImGui::Separator();
+            ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+            if (tab == TAB_GAME) {
+                game_files_section(win);
+                ui_heading(T("Options", "Opções"));
+                ImGui::BeginDisabled(!known);
+                ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
+                                                             "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
+                ImGui::Checkbox(T("Skip controller selection", "Pular a escolha do controle"), &skipc);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
+                                                             "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
+                ImGui::EndDisabled();
+            } else if (tab == TAB_GRAPHICS) {
+                const char *extra[] = {T("Resolution", "Resolução")};
+                float x = ui_graphics_x(extra, 1);
+                ui_row(extra[0], x);
+                ImGui::Combo("##res", &res, g_pt ? res_pt : res_en, 5);
+                ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("When the game starts.", "Ao começar o jogo."));
+                ImGui::Separator();
+                ui_page_graphics(x, known);
+                ui2x_section(ready, &ui2x_on);
+            } else if (tab == TAB_IMAGE) {
+                ui_page_image_sound();
+            } else if (tab == TAB_CONTROLS) {
+                keys_section();
+            } else {
+                mods_section(win, inst);
+            }
+            ImGui::EndChild();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
         ImGui::End();
 
         ImGui::Render();
@@ -515,4 +646,5 @@ extern "C" void launcher_lg_run(const char *root) {
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext(ctx);
     ImGui::SetCurrentContext(prev_ctx);
+    window_as_game(win);
 }

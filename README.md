@@ -163,16 +163,16 @@ The game runs in handheld mode (one player).
 | Close the game | Esc | | − and + together |
 
 While you aim a Poké Ball the mouse is captured by the window; outside of aiming it is free. Mouse sensitivity is
-set in the launcher (Controls tab).
+set in the launcher (Controls page).
 
 ## Translations and mods
 
 Mods that replace the game's files - Atmosphere LayeredFS packs: fan translations, textures, models - work as they
-are, several at once, from the launcher's **Mods** tab (where two replace the same file, the higher one in the list
+are, several at once, from the launcher's **Mods** page (where two replace the same file, the higher one in the list
 wins). Mods of the game's code (exefs, IPS patches, cheats) can't apply to a recompiled game. The game has no Portuguese (or any other fan) translation of its own; fan translations
 come this way:
 
-1. In the **Mods** tab, click **Install a mod...**.
+1. On the **Mods** page, click **Install a mod...**.
 2. Pick the file you downloaded (`.zip`, `.rar` or `.7z`, as it came), and the launcher unpacks it and finds the
    `romfs` folder for the game you set up (by its title id) inside it. Packs made for both games are fine.
 3. Tick it in the list (a new one comes ticked and first). With none ticked, the game is as it is.
@@ -397,10 +397,10 @@ protegeu o computador" (o exe não tem assinatura digital), clique em **Mais inf
 recompila o código do jogo para o seu PC (só uma vez; uns 13 minutos num i5-14600KF, mais em CPUs com menos núcleos). Depois é só clicar em **Jogar**. O launcher
 abre em português quando o Windows está em português.
 
-**Opções experimentais** (no launcher): o **Limite de quadros** na aba Gráficos, também no menu F12 (30, 60 ou
+**Opções experimentais** (no launcher): o **Limite de quadros** na página Gráficos, também no menu F12 (30, 60 ou
 120 fps: o mundo nessa taxa de verdade, sem acelerar; menus e Pokédex suavizados; batalhas e capturas continuam a 30),
-e **Batalhas selvagens** na aba Jogo, desligada por padrão (encostar num Pokémon selvagem começa uma batalha clássica
-contra ele e, depois, a captura). A **zona morta do analógico** do controle fica na aba "Controles".
+e **Batalhas selvagens** na página Jogo, desligada por padrão (encostar num Pokémon selvagem começa uma batalha clássica
+contra ele e, depois, a captura). A **zona morta do analógico** do controle fica na página "Controles".
 
 ### Jogar em português (tradução PT-BR)
 
@@ -408,7 +408,7 @@ O jogo não tem português. A tradução de fãs do grupo **Pokémon Switch Bras
 
 1. Baixe a tradução PT-BR do Let's Go no canal oficial do grupo Pokémon Switch Brasil (o arquivo `.rar` ou `.zip`,
    do jeito que vier).
-2. No launcher, na aba **Mods**, clique em **Instalar mod...** e escolha o arquivo baixado. Não precisa descompactar: o
+2. No launcher, na página **Mods**, clique em **Instalar mod...** e escolha o arquivo baixado. Não precisa descompactar: o
    programa abre o arquivo e acha sozinho a pasta do Let's Go Eevee (`0100187003A36000`), mesmo em pacotes que
    trazem os dois jogos.
 3. Na lista de mods, deixe a tradução marcada (a recém-instalada já vem marcada e no topo) e clique em **Jogar**.

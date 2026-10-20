@@ -4,15 +4,17 @@
 
 Most of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16).
 
-- **Start screen and F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the window)
-  and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen has tabs - Game,
-  Graphics, Image and sound, Controls, Mods - with Play always below them, and now has the graphics settings too; the
-  F12 menu has Graphics, Image and sound, Advanced. L / R on a controller change the tab. The start screen fills its
-  window (the content in a column in the middle), and the "close the game?" question's buttons line up with its text.
-- **One frame rate setting**: the start screen's "60 fps" box is gone; the Graphics tab's frame rate limit (30 / 60 /
+- **A launcher, and the F12 menu redone alike**: the same look (the F12 menu's colours and fonts, scaled to the
+  window) and the same settings pages, from one place (`runtime/ui/settings_ui.mm`). The start screen is a launcher's
+  window - no system frame (dragged by its top; its own minimize and close), taller than wide - with a sidebar: the
+  project's icon, the pages (Game, Graphics, Image and sound, Controls, Mods) and a big Play; it now has the graphics
+  settings too. Play gives the game its window back (frame, 1280 x 720, full screen when set). The F12 menu has tabs:
+  Graphics, Image and sound, Advanced. L / R on a controller change the page / tab. The "close the game?" question's
+  buttons line up with its text.
+- **One frame rate setting**: the start screen's "60 fps" box is gone; the Graphics page's frame rate limit (30 / 60 /
   120) is the same row as the F12 menu's.
 - **Translation is now Mods**: any mod that replaces the game's files (Atmosphere LayeredFS: translations, textures,
-  models) installs and is ticked in the Mods tab, several at once: where two replace the same file, the higher one
+  models) installs and is ticked on the Mods page, several at once: where two replace the same file, the higher one
   in the list wins (arrows move them; a new one comes first). **Open the mods folder** shows where to copy one by
   hand, and the list follows when you come back. Mods of the game's code (exefs, IPS, cheats) can't apply to the
   recompiled game, and the tab says so. `larecomp.ini`: `mod = <name>|<name>...` (one name, as before, still works).

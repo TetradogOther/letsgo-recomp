@@ -34,8 +34,8 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SNAP=<quadro A>,<quadro B>` | copia as páginas não nulas do heap em A e, a cada 250 quadros a partir de B (30 vezes), lista os deltas pequenos mais comuns das palavras que cresceram (3 a 20 acertos) com endereços de exemplo; o ganho de XP de uma equipe é um delta compartilhado. O heap tem muito contador mudando, então o ruído é grande |
 | `LARECOMP_GYRO_AXES=<yaw><pitch>` | eixos do giroscópio virtual movidos pelo mouse (padrão `zx`) |
 | `mouse_sens` (larecomp.ini) | graus de giro por pixel do mouse (padrão 0,1) |
-| `LARECOMP_LAUNCHER_TAB=<n>` | launcher aberto na aba n (0 Jogo, 1 Gráficos, 2 Imagem e som, 3 Controles, 4 Mods; com `LARECOMP_LAUNCHER_SHOT`) |
-| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher na aba "Controles" / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_TAB=<n>` | launcher aberto na página n (0 Jogo, 1 Gráficos, 2 Imagem e som, 3 Controles, 4 Mods; com `LARECOMP_LAUNCHER_SHOT`) |
+| `LARECOMP_LAUNCHER_KEYS=1` / `<slot>` / `<slot>:<tecla>` | launcher na página "Controles" / esperando a tecla da ação `slot` (`BIND_*` em runtime/input_bind.h) / apertando essa tecla (com `LARECOMP_LAUNCHER_SHOT`) |
 
 ## Travamentos e crashes
 | Ferramenta | Uso |
