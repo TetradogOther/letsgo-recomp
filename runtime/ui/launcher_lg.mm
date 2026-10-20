@@ -378,6 +378,13 @@ static void window_as_game(SDL_Window *win) {
     SDL_SetWindowSize(win, g_game_w, g_game_h);
     SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     if (g_settings.fullscreen && !getenv("LARECOMP_WINDOW") && !getenv("LARECOMP_HIDDEN")) SDL_SetWindowFullscreen(win, true);
+    // black at the new size until the game draws (else the launcher's last image stayed in a corner while it loads);
+    // vk_frame_begin makes the swapchain again for the new size
+    SDL_SyncWindow(win);
+    SDL_PumpEvents();
+    static const float black[4] = {0, 0, 0, 1};
+    for (int i = 0; i < 3; i++)
+        if (vk_frame_begin(black)) vk_frame_end(NULL);
 }
 
 // The project's icon (the Master Ball: icon.png beside the exe, or docs/icon), for the sidebar
