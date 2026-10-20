@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **SSAO at half its intensity on the title screen and in cutscenes** (when it is on), the setting's own in the world
+  and in battles; Pikachu and Eevee 1.0.0.
+  - The title screen (the logo with Pikachu or Eevee): before the world's first update this boot - the world's update
+    is now hooked at any frame rate, not only at 60 / 120 (`runtime/hle/fps60.c` `game_title`; logged: `[scene] the
+    world's first update`). Measured on the title screen: occlusion 17.4 -> 9.0; in the world the same (5.31 / 5.31).
+  - Cutscenes: the event scripts take the camera with the native `EvCameraStart` and give it back with `EvCameraEnd`
+    (a talk with someone doesn't); between the two (`runtime/hle/cutscene.c`, `LARECOMP_CUTSCENE_LOG=1`). The natives
+    were found by name in the image's table of script natives, in both games (Eevee `0x7000180a20` / `a70`, Pikachu
+    `0x70001809f0` / `a40`); the hooks install in both. Not yet seen in a cutscene: none was reached in the tests
+    (the new game's intro waits at an interactive step).
+  - `LARECOMP_IMAGE_DUMP=<file>` writes the main module as loaded (research: reading the image without the NSO tools).
 - **FSR 3.1 sharpening slider** under the FSR 3.1 mode (graphics page, start screen and F12): its RCAS, AMD's robust
   contrast-adaptive sharpening, 0-100 %, 50 % by default (`fsr3_sharpness` in `larecomp.ini`); the frame generation's
   in-between images follow it. It was the TAA sharpness slider's value; that slider (Image and sound) is now TAA's

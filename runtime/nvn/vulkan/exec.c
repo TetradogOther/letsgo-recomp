@@ -4293,7 +4293,11 @@ static void ssao_run(void) {
             // temporal: the sample spiral turns every frame (golden ratio steps), the history follows the camera
             bool temporal = g_settings.ssao_temporal && mv;
             float turn = temporal ? (float)fmod((double)rf * 0.6180339887, 1.0) : 0.0f;
-            float pc[12] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity, mo,
+            // half the intensity on the title screen and in cutscenes (their close-ups and lit scenes took it too dark),
+            // the setting's in the world and in battles (runtime/hle/fps60.c game_title, runtime/hle/cutscene.c)
+            extern bool game_title(void), game_cutscene(void);
+            float ao_k = game_title() || game_cutscene() ? 0.5f : 1.0f;
+            float pc[12] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], g_settings.ssao_radius, g_settings.ssao_intensity * ao_k, mo,
                             0.08f * (float)h, turn, (float)g_settings.ssao_samples};
             post_pass_view(cb, p_ao, &dv, 1, post_view(a0), w, h, pc, sizeof pc, false, false);
             float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};

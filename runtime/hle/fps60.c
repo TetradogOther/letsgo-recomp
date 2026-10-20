@@ -97,6 +97,7 @@ static int field_hook(Cpu *c, uint64_t addr) {
     g_n_world++;
     if (g_mark_scene) { g_mark_scene = false; g_world_back = (long)renderer_game_frame(); LOG("[scene] world again %ld\n", g_world_back); }
     g_field_ran = true;
+    if (!g_played) LOG("[scene] the world's first update at present %llu (the title screen is over)\n", (unsigned long long)renderer_game_frame());
     g_played = true;
     g_special = false;
     g_scene = false;
@@ -153,6 +154,9 @@ bool fps60_world(void) { return g_world; }
 // A menu (the Pokédex, the bag...): the world stopped and no battle or capture runs. Logic at 30, shown at 60 with the
 // in-between image (runtime/nvn/vulkan/exec.c); battles and captures get none (tried, left out: docs/HISTORICO.md 46).
 bool fps60_menu(void) { return g_on && g_played && !g_world && !g_special; }
+// Before the world's first update this boot: the logos, the title screen (the logo with Pikachu or Eevee), loading
+// (runtime/nvn/vulkan/exec.c: SSAO at half its intensity, as in cutscenes)
+bool game_title(void) { return !g_played; }
 
 // At each present (before its pacing): was this a world frame?
 void fps60_probe_present(void);
@@ -269,6 +273,8 @@ void fps60_configure(void) {
     extern uint64_t rt_addr(uint64_t eevee);  // (runtime/fnhook.c: 0 in a build it doesn't know)
     if (!rt_addr(FIELD_UPDATE)) g_on = g_all60 = false;
     if (g_on || g_stats || getenv("LARECOMP_INPUT_LOOP")) hook_all();
+    // the world's update always: g_played tells the title screen (game_title) whatever the frame rate
+    else if (rt_addr(FIELD_UPDATE)) rt_register_fnhook(FIELD_UPDATE, field_hook);
     g_world = true, g_special = g_scene = g_played = false;
     if (g_on) LOG("[fps60] on: the world at %d, menus at 30 with in-between images, battles and captures at 30\n", g_rate);
 }

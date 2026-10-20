@@ -195,6 +195,7 @@ int main(int argc, char **argv) {
         { extern void fps60_configure(void); fps60_configure(); }  // (runtime/hle/fps60.c: the launcher's 60 fps option)
         { extern void wildbattle_configure(void); wildbattle_configure(); }  // (runtime/hle/wildbattle.c: the wild battles option)
         { extern void controller_skip_configure(void); controller_skip_configure(); }  // (runtime/hle/controller_skip.c)
+        { extern void cutscene_configure(void); cutscene_configure(); }  // (runtime/hle/cutscene.c)
         boot(root);
         int kind = ui_run();  // window and input on the main thread; returns when a reboot is requested
         teardown();
