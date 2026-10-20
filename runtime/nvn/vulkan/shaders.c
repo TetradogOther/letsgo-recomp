@@ -865,6 +865,8 @@ static const char *builtin_src(const char *name, int *stage) {
     // with the real frames, so the image is resolved here instead, like TAA - t = the image (render size, after the
     // colour pass), h = N's FSR 3.1 output (the output's size), taken where the motion vectors (relative to N) say each
     // pixel was and clipped to t's 3x3 (YCoCg min / max), mixed with t by the history weight. Uncovered or off-image: t.
+    // h is sampled Catmull-Rom (5 bilinear taps): bilinear, reprojecting softened it and the in-between images were 13 %
+    // less detailed than the real frames - a sharpness that pulsed at the frame rate (exec.c then adds FSR's RCAS).
     // a.xy = 1 / the output's size, a.zw = 1 / t's size, b.x = the history's weight.
     if (!strcmp(name, "side_resolve.frag")) {
         *stage = STAGE_FRAGMENT;
@@ -876,6 +878,17 @@ static const char *builtin_src(const char *name, int *stage) {
                "layout(location = 0) out vec4 o;\n"
                "vec3 ycc(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }\n"
                "vec3 rgb(vec3 y) { return vec3(y.x + y.y - y.z, y.x + y.z, y.x - y.y - y.z); }\n"
+               "vec3 cr(vec2 uv) {\n"  // (Catmull-Rom from 5 bilinear taps, the corners left out)
+               "  vec2 sz = vec2(textureSize(h, 0)), p = uv * sz, c1 = floor(p - 0.5) + 0.5, f = p - c1;\n"
+               "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+               "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);\n"
+               "  vec2 w12 = w1 + w2, t0 = (c1 - 1.0) / sz, t3 = (c1 + 2.0) / sz, t12 = (c1 + w2 / w12) / sz;\n"
+               "  vec3 r = texture(h, vec2(t12.x, t0.y)).rgb * w12.x * w0.y + texture(h, vec2(t0.x, t12.y)).rgb * w0.x * w12.y\n"
+               "         + texture(h, t12).rgb * w12.x * w12.y + texture(h, vec2(t3.x, t12.y)).rgb * w3.x * w12.y\n"
+               "         + texture(h, vec2(t12.x, t3.y)).rgb * w12.x * w3.y;\n"
+               "  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;\n"
+               "  return max(r / ws, vec3(0.0));\n"
+               "}\n"
                "void main() {\n"
                "  vec2 uv = gl_FragCoord.xy * pc.a.xy;\n"
                "  vec3 c = texture(t, uv).rgb;\n"
@@ -888,7 +901,7 @@ static const char *builtin_src(const char *name, int *stage) {
                "  ivec2 ms = textureSize(mv, 0);\n"
                "  vec2 puv = uv - texelFetch(mv, min(ivec2(uv * vec2(ms)), ms - 1), 0).xy;\n"
                "  if (any(lessThan(puv, vec2(0.0))) || any(greaterThanEqual(puv, vec2(1.0)))) { o = vec4(c, 1.0); return; }\n"
-               "  vec3 hc = rgb(clamp(ycc(texture(h, puv).rgb), mn, mx));\n"
+               "  vec3 hc = rgb(clamp(ycc(cr(puv)), mn, mx));\n"
                "  o = vec4(mix(c, hc, pc.b.x), 1.0);\n"
                "}\n";
     }

@@ -3987,7 +3987,8 @@ static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK
 // 9: their RGBA8 encoding (LARECOMP_MV_DUMP), 10, 11: SSAO history (RG16F, ping-pong), 12, 13: the debug views,
 // 14-19: GI (normals, work, history, debug: gi_run), 20: the scene pass's velocity target (per-object motion vectors), 21, 22: TAA history, 23: the scene depth as R32F, 24: FSR 3's output (storage), 25: the image
 // before the interface, 26: FSR 3's interface mask, 27: an in-between image's TAA result (its history left as it was),
-// 28, 29: N's SSAO / GI moved to an in-between image, 30: an in-between image resolved against N's FSR 3.1 output.
+// 28, 29: N's SSAO / GI moved to an in-between image, 30: an in-between image resolved against N's FSR 3.1 output,
+// 31: that image sharpened.
 static TexBackend *post_image_fmt(int i, uint32_t w, uint32_t h, VkFormat fmt) {
     static TexBackend img[32];
     TexBackend *d = &img[i];
@@ -4166,6 +4167,7 @@ static TexBackend *mv_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32
 // (post image 14) -> trace at 1 / gi_div of each axis (15) -> blur across (16) -> blur down (15) -> temporal (history
 // 17 / 18, along the camera motion vectors) -> added onto the scene, edge-aware (the debug view: 19, at the present).
 static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, float mo, TexBackend *mv, uint64_t fr) {
+    gp_mark(cb, "ours: GI %ux%u%s", w, h, ip_replaying ? " (in-between)" : "");
     uint32_t div = (uint32_t)g_settings.gi_div, lw = (w + div - 1) / div, lh = (h + div - 1) / div;
     // (pipelines and images before any rendering begins)
     VkPipeline p_n = post_pipeline("gi_normal.frag");
@@ -4253,6 +4255,7 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
 // indirect light, then the occlusion - from the depth at its size -> blur across -> blur down ->
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
 static void ssao_run(void) {
+    gp_mark(vk_cmd(), "ours: SSAO%s", ip_replaying ? " (in-between)" : "");
     uint64_t fr = fx_frame();
     ssao_settle_camera();
     ao.done_frame = fr;
@@ -4397,6 +4400,7 @@ static const float *taa_jitter(void) {
 }
 
 static void taa_run(void) {
+    gp_mark(vk_cmd(), "ours: TAA / motion vectors%s", ip_replaying ? " (in-between)" : "");
     uint64_t fr = fx_frame();
     ao.taa_frame = fr;
     TexBackend *d = ao.depth;
@@ -4481,6 +4485,7 @@ static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, 
 // res (may be NULL): the image behind the view returned (b when nothing was done)
 static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_d, double oh_d, TexBackend **res) {
     post_last_ow = ow_d, post_last_oh = oh_d;
+    gp_mark(cb, "ours: post %ux%u -> %.0fx%.0f%s", b->width, b->height, ow_d, oh_d, ip_side_post ? " (in-between)" : "");
     VkImageView v = raw_view(b);
     TexBackend *vb = b;  // (the image behind v: FSR 3 takes the image itself)
     TexBackend *rb_ = b;  // (... and behind the result: *res)
@@ -4568,6 +4573,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
                 cb = vk_cmd();
             }
         }
+        gp_mark(cb, "ours: FSR 3.1%s", ip_side_post ? " side resolve (in-between)" : "");
         Fsr3Dispatch d = {.color = in->image, .depth = dr->image, .mv = mv->image, .mask = mask, .output = out->image,
                           .rw = b->width, .rh = b->height, .ow = ow, .oh = oh, .mvw = mv->width, .mvh = mv->height,
                           .jx = taa_jit[2], .jy = taa_jit[3],
@@ -4586,6 +4592,20 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
             post_pass_view(cb, post_pipeline("side_resolve.frag"), si, 3, post_view(so), ow, oh, ps, 32, false, false);
             vk_full_barrier(cb);
             v = post_view(so), rb_ = so;
+            // ... and sharpened as FSR 3.1 sharpens the real frames (RCAS, the same strength: its stops 2 - 2 x sharpness),
+            // or the in-between images were softer than the real ones and the detail pulsed at the frame rate
+            if (g_settings.taa_sharpness > 0.01f) {
+                TexBackend *r = post_image(31, ow, oh);
+                // (0.6 stops weaker than FSR's: the Catmull-Rom history keeps detail of its own - at FSR's strength the
+                // in-between images were 4 - 10 % sharper than the real frames, at 0.7 weaker within 3 %; research:
+                // LARECOMP_SIDE_SHARP_STOPS)
+                static float extra = -1;
+                if (extra < 0) extra = getenv("LARECOMP_SIDE_SHARP_STOPS") ? (float)atof(getenv("LARECOMP_SIDE_SHARP_STOPS")) : 0.6f;
+                float pr[8] = {exp2f(-2.0f * (1.0f - g_settings.taa_sharpness) - extra), 0, 0, 0, (float)ow, (float)oh};
+                VkImageView ri_[3] = {v};
+                post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
+                v = post_view(r), rb_ = r;
+            }
         } else if (fsr3_dispatch(cb, &d)) {
             vk_full_barrier(cb);
             v = post_view(out), rb_ = out;
@@ -4625,6 +4645,7 @@ static VkImageView ip_post_view(TexBackend *b, double ow, double oh);
 void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh, const float pv[8]) {
     if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
     double ow = pv[6] > 0 ? vw / pv[6] : vw, oh = pv[7] > 0 ? vh / pv[7] : vh;
+    gp_mark(cb, "ours: present to the window");
     VkImageView src = ip_post_view(b, ow, oh);  // (an image of a present kept until now: processed when it was made)
     if (!src) src = post_process(cb, b, ow, oh);
     VkPipeline p = present_pipeline(g_vk.sc_format);
@@ -5400,6 +5421,7 @@ static TexBackend *hold_copy_into(TexBackend *d, TexBackend *src) {
     }
     d->sx = src->sx; d->sy = src->sy; d->scalable = src->scalable;
     VkCommandBuffer cb = vk_cmd();
+    gp_mark(cb, "ours: keep copy %ux%u", src->width, src->height);
     vk_full_barrier(cb);
     VkImageCopy rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                       .extent = {src->width, src->height, 1}};
@@ -5568,6 +5590,7 @@ static void ip_cam_restore(void) {
 
 // The image at t (0..1, from N-1 to N) into the game's textures (after vk_interp_begin said yes)
 void vk_interp_replay(float t) {
+    gp_mark(vk_cmd(), "ours: replay t=%.2f", t);
     IpFrame *cur = &ipf[ipc];
     ip_t = t;
     {   // LARECOMP_INTERP_TFIX=<t> (research): every in-between image at that t (1: should be frame N itself)

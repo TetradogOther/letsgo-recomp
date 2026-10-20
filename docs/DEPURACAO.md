@@ -56,6 +56,11 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_FG_AT=<present>:<k>,...` | muda a geração de quadros para k (0, 2, 3, 4) naqueles presents, como o menu F12 |
 | `LARECOMP_PRESENT_LOG=<arquivo>` | CSV com cada imagem da janela: o present, quando a chamada saiu e quando chegou à tela (`VK_KHR_present_wait`, numa thread à parte): `id,frame,image,nimg,present_ms,shown_ms`. Mostra o ritmo da geração de quadros como ela é vista |
 | `LARECOMP_PENDING_LOG=1` | cada imagem agendada (geração de quadros) ao ser mostrada: o atraso sobre a sua hora e o avanço (`lead`) aprendido |
+| `LARECOMP_FG_GPULAG=1` | (pesquisa) a cada present com geração de quadros, espera a GPU e registra quanto depois do present ela terminou as imagens (`[gpulag]`); a espera estraga o ritmo, só para medir |
+| `LARECOMP_FG_DRAW_AT_TIME=1` | (comparação) as imagens agendadas voltam a ser desenhadas na hora delas, na fila principal, como antes da fila de apresentação |
+| `LARECOMP_ONE_QUEUE=1` | (comparação) sem a segunda fila: as imagens desenhadas antes são apresentadas da fila principal |
+| `LARECOMP_FG_NO_VSYNC_GRID=1` | (comparação) as imagens agendadas fora da grade de atualização do monitor (`DwmGetCompositionTimingInfo`) |
+| `LARECOMP_SIDE_SHARP_STOPS=<stops>` | (pesquisa) o RCAS das imagens intermediárias com FSR 3.1: tantos stops mais fraco que o do FSR (padrão 0,6) |
 | `LARECOMP_INTERP_REJ_LOG=1` | cada present sem imagens intermediárias e o motivo (`[interp-rej]`, `[interp-cut]`) e cada objeto mantido no quadro N (`[interp-obj]`: a fração das suas palavras que mudou muito; acima de `LARECOMP_INTERP_OBJ_LIMIT`, padrão 0,4, não é misturado) |
 | `LARECOMP_INTERP_JUMP_ABS=<unidades>` | (pesquisa) o termo absoluto do salto de uma palavra entre N-1 e N (padrão 100; era 4): acima de metade do seu tamanho e disso, a palavra - e o buffer inteiro - fica no quadro N |
 | `LARECOMP_INTERP_TFIX=<t>` | (pesquisa) todas as imagens intermediárias nesse t: com 1 devem ser idênticas ao quadro N (confere a reexecução), com 0 ao quadro N-1 (o que não fica igual é o que não se mistura bem) |

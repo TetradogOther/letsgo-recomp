@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **Frame generation in full screen at 4K: even, and no images lost**. Measured at the screen (`LARECOMP_PRESENT_LOG`,
+  4K full screen, 240 Hz, 60 fps x 2, FSR 3.1 native, SSAO, GI high): before, 1 image in 6 reached the screen in the
+  same refresh as the one before it (one of the two lost) and others came in pairs 15 / 0 ms apart; now none is lost
+  and 97 % of the intervals are 8.3 ms (the rest of the 90 % measured is the measurement's own wobble: an interval
+  off by 2 ms with its neighbour off the other way). Windowed, as before. Three causes:
+  - The images were drawn into the window at their time on the one GPU queue, behind the next frame's work (at 4K the
+    GPU runs ~10 ms behind the presents). Now each is drawn into a window image right after its replay and only
+    presented at its time, from a second queue (`LARECOMP_FG_DRAW_AT_TIME`, `LARECOMP_ONE_QUEUE` to compare).
+  - The render thread presented them between jobs, and waits for the GPU inside some of them: each present's last
+    image went ~8 ms late, beside the next present's first. Now a thread of their own presents them (the swapchain
+    under a lock; acquiring retries without holding it).
+  - Off the display's refresh, an image due near a blank went at that one or the next by microseconds. Now on the
+    refresh grid (Windows' compositor timing), a quarter of a refresh after the blank before its time.
+  The lead before the first image now goes up to 16 ms (at 4K the GPU finishes a present's images 9-12.5 ms after
+  it, `LARECOMP_FG_GPULAG`).
+- **The in-between images are as sharp as the real frames with FSR 3.1**: they were 13-15 % less detailed (no RCAS,
+  and the reprojected history sampled bilinearly), and the detail pulsed at the frame rate - smoothness lost even
+  with the motion right. Now the history is sampled Catmull-Rom and RCAS sharpens them, 0.6 stops weaker than FSR's
+  (it sharpens a history that is sharp already): within 3 % of the real frames.
+- GPU profiler marks for our own passes (`ours: GI`, `FSR 3.1`, `SSAO`, `post`, `keep copy`, `present`, `replay`):
+  at 4K a real frame costs ~7-8 ms (GI high 3.1, FSR 3.1 native 1.6-2.7, the game's scene 1.3), an in-between image
+  ~2.2 ms (the scene 1.3-1.5, the rest reprojected).
 - **Frame generation: no more flickering tall grass, and repeated objects in general**: walking past tall grass, clumps
   went missing, squashed or shifted in the in-between images (holes showing the ground, every few frames). Found with
   a flicker detector (the in-between image against the real frames around it, motion-compensated) and research
