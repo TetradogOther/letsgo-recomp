@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Frame generation: no more flickering tall grass, and repeated objects in general**: walking past tall grass, clumps
+  went missing, squashed or shifted in the in-between images (holes showing the ground, every few frames). Found with
+  a flicker detector (the in-between image against the real frames around it, motion-compensated) and research
+  switches (`LARECOMP_INTERP_TFIX`, `_DROP`, `_FAR_LOG`, `_SIG_LOG`: docs/DEPURACAO.md). Three causes, all fixed in
+  general rather than for the grass:
+  - **A draw is paired with the previous frame by all its constant buffers together**, not by the first one. The 63
+    grass clumps share the camera buffer and differ in the next (their offsets); deciding at the first one tied all
+    63, and a clump took another's offsets (252 -> 49 units, where the wind moves them 1 or 2). Of the previous
+    frame's draws of the same program and arguments - any vertex buffer address or object, since the game reuses
+    buffers between copies - the closest that doesn't jump; its own identity first.
+  - **Occurrences are counted per draw**, not per buffer slot: one of the grass draws leaves a slot unbound, and that
+    slot's count was one behind the others for every draw after it.
+  - **A value that held still and then changes switches half-way** instead of being blended: a sprite's frame in an
+    atlas, an expression, a blink. Motion changes every frame and is still blended.
+  Walking left past the tall grass at 30 fps x 3 (FSR 3.1, SSAO, GI): the frames that flickered went from 5-9 % of
+  the image to 1 % (the level of the others: the detector's noise at edges). Walking at 2x: 97 % of the moving
+  blocks halfway. 6000 turbo frames at 4x without a fault; 4K at 4x still 60 / 240 fps.
 - **Frame generation interpolates the characters too**: the in-between images showed the player (and other walking
   characters) almost where frame N had them, so they kept moving at the game's rate while the camera and the scenery
   were smooth. Two checks meant to catch cuts and swapped models fired on ordinary motion:

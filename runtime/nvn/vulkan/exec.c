@@ -684,6 +684,20 @@ static int ip_on = -1;
 static bool ip_replaying;     // running a recorded frame again for the in-between image
 static uint64_t ip_stats_tagged, ip_stats_untagged;  // draws with / without a game object (CMD_OBJECT)
 static uint64_t ip_draw_sig;  // the current draw's identity (draw_)
+static long ip_sig_dbg;  // (LARECOMP_INTERP_SIG_LOG)
+static uint64_t ip_stats_held;  // words switched half-way instead of blended (ip_cbuf: held, then stepped)
+static uint64_t ip_stats_content;  // draws paired with another draw than their identity names (ip_pair_draw)
+static uint32_t ip_draw_occ;  // which occurrence of its identity this draw is, this frame / replay (ip_occ_next)
+static uint32_t ip_occ_next(uint64_t sig);
+static uint64_t ip_draw_shape;  // the draw without its vertex buffer's address or object (ip_pair_draw)
+static bool ip_part_set;  // (the replay: this draw's partner in N-1, ip_pair_draw)
+static void ip_draw_record(void);
+static void ip_pair_draw(void);
+static uint64_t ip_part_sig;
+static uint32_t ip_part_occ;
+static int ip_kept_why;  // (the replay: why this 3D draw kept frame N's constants - 1 no match, 2 object rejected, 3 jump)
+static char ip_sig_txt[256];
+static int ip_sig_txt_n;
 static bool ip_draw_obj;      // ... and whether it belongs to a game object (CMD_OBJECT): only those are blended
 static bool ip_draw_2d;       // ... a 2D draw (no depth test): interface, menus
 static bool ip_pick_set;      // ... its previous occurrence picked (ip_cbuf, at its first cbuf)
@@ -3055,16 +3069,39 @@ static void draw_(CmdRec *r, bool indexed) {
         if (st.obj) h = (h ^ st.obj) * 0x100000001B3ull, ip_stats_tagged++;
         else ip_stats_untagged++;
         ip_draw_sig = h;
+        uint64_t sh = 0x84222325cbf29ce4ull ^ (uint64_t)(uintptr_t)st.program ^ ((uint64_t)indexed << 63);
+        for (int i = 0; i < draw_nargs(indexed); i++) sh = (sh ^ r->x[i]) * 0x100000001B3ull;
+        ip_draw_shape = sh;
+        ip_draw_occ = ip_occ_next(h);
+        ip_part_set = false;
+        {   // LARECOMP_INTERP_SIG_LOG=<present>:<cbuf size>: what identifies each draw binding a cbuf of that size, at that
+            // present and the next (research: draws that find no match in the previous frame)
+            static long at = -2, sz;
+            if (at == -2) { const char *e = getenv("LARECOMP_INTERP_SIG_LOG"); at = e ? atol(e) : -1; sz = e && strchr(e, ':') ? atol(strchr(e, ':') + 1) : 0; }
+            ip_sig_dbg = at >= 0 && !ip_replaying && (long)renderer_present_count() >= at && (long)renderer_present_count() <= at + 1 ? sz : 0;
+            static int farlog = -1;
+            if (farlog < 0) farlog = getenv("LARECOMP_INTERP_FAR_LOG") != NULL;
+            if (ip_sig_dbg || (farlog && ip_replaying)) {
+                ip_sig_txt_n = snprintf(ip_sig_txt, sizeof ip_sig_txt, "prog %p vbuf %#llx obj %#llx args", (void *)st.program,
+                                        (unsigned long long)st.vbuf[0].addr, (unsigned long long)st.obj);
+                for (int i = 0; i < draw_nargs(indexed) && ip_sig_txt_n < (int)sizeof ip_sig_txt - 24; i++)
+                    ip_sig_txt_n += snprintf(ip_sig_txt + ip_sig_txt_n, sizeof ip_sig_txt - ip_sig_txt_n, " %llx", (unsigned long long)r->x[i]);
+            }
+        }
         ip_pick_set = false;  // (ip_cbuf: this draw's previous occurrence, picked at its first cbuf)
+        ip_kept_why = 0;
         // 3D draws (a depth target with the depth test on) are blended, with or without a game object: the ground and the
         // scenery have none, and they must take the same (blended) light matrices as the shadow map the objects are drawn
         // into, or shadows slide away from their casters. Interface and full-screen passes don't test depth: frame N.
         ip_draw_obj = st.rt.depth != NULL && st.ds[0];
+        { static int all = -1; if (all < 0) all = getenv("LARECOMP_INTERP_ALL3D") != NULL; if (all) ip_draw_obj = true; }  // (research)
         // In menus (the Pokédex, the bag...) the 2D draws are blended too: lists and panels slide there. A 2D draw takes the
         // strict jump test in ip_cbuf (a recycled row or glyph moves far: it keeps frame N).
         ip_draw_2d = !ip_draw_obj;
         extern bool fps60_menu(void);
         if (fps60_menu()) ip_draw_obj = true;
+        if (!ip_replaying) ip_draw_record();
+        else if (ip_draw_obj && !ip_draw_2d) ip_pair_draw();  // (3D: its partner by all its cbufs; else ip_pick, by order)
     }
     ShaderKey vkey = {0}, fkey = {0};
     vkey.glsl = fkey.glsl = 1;
@@ -3484,7 +3521,12 @@ static void draw_(CmdRec *r, bool indexed) {
     if (exp_hit && exp_mode == 2) { VkRect2D one = {{0, 0}, {1, 1}}; vkCmdSetScissor(cb, 0, 1, &one); }
     bool gp_q = g_gpuprof_frame && gp_draw_marks && gps_qp && gp_n && gps_n < GP_MAX;
     if (gp_q) vkCmdBeginQuery(cb, gps_qp, (uint32_t)gps_n, 0);
-    if (exp_hit && exp_mode == 1) { /* skipped */ }
+    // LARECOMP_INTERP_DROP=<mask> (research): the in-between images leave out the 3D draws that kept frame N's constants
+    // for these reasons (bit 1 no match, 2 object rejected, 3 jump: 2 / 4 / 8) - what is missing shows what they are
+    static int ip_drop = -1;
+    if (ip_drop < 0) ip_drop = getenv("LARECOMP_INTERP_DROP") ? atoi(getenv("LARECOMP_INTERP_DROP")) : 0;
+    if (ip_drop && ip_replaying && ip_kept_why && (ip_drop & (1 << ip_kept_why))) { /* left out */ }
+    else if (exp_hit && exp_mode == 1) { /* skipped */ }
     else if (!use_index) vkCmdDraw(cb, count, inst_eff, first, base_inst);
     else vkCmdDrawIndexed(cb, icount, inst_eff, 0, base_vertex, base_inst);
     if (gp_q) { vkCmdEndQuery(cb, gps_qp, (uint32_t)gps_n); gp_stat[gp_n - 1] = gps_n + 1; gps_n++; }
@@ -4877,7 +4919,12 @@ void backend_execute(uint64_t handle) {
 //    memory (compute, copies to buffers, inline uniform updates, syncs, counters); each constant buffer is the blend of
 //    its two copies, word by word, for normal floats close enough (other words, and draws without a match, keep N);
 //  - a list whose records changed since it ran (the game reused its memory) cancels that frame's in-between image.
-typedef struct { uint64_t key; uint32_t off, size; uint64_t obj; } IpEntry;  // (obj: the game object of the draw)
+// (obj: the game object of the draw; stage / k: its cbuf slot; chg: which of its first 64 vec4s changed since its
+// partner in the frame before, chg_known once the replay compared them - ip_cbuf's held values)
+typedef struct { uint64_t key; uint32_t off, size; uint64_t obj; uint8_t stage, k; bool chg_known; uint64_t chg; } IpEntry;
+// A draw of the recorded frame: its identity, occurrence and shape (ip_pair_draw), and its cbufs (entries first ..
+// first + count - 1, recorded one after the other while it binds them)
+typedef struct { uint64_t sig, shape; uint32_t occ, first, count; } IpDraw;
 typedef struct {
     IpEntry *e;
     uint32_t n, cap;
@@ -4889,6 +4936,11 @@ typedef struct {
     bool overflow, valid;
     uint64_t destroyed;  // g_nvn_destroyed when the frame started
     __typeof__(st) start;
+    IpDraw *dr;  // its draws (ip_pair_draw)
+    uint32_t ndr, drcap;
+    uint32_t *drtab;  // open addressing: (sig, occ) -> dr index + 1
+    uint32_t *dr_by_shape, dr_by_shape_cap;  // draw indices sorted by shape, built when first needed
+    bool dr_sorted;
 } IpFrame;
 extern uint64_t g_nvn_destroyed;  // (objects.c: textures, pools, programs the game finalized)
 #define IP_TAB (1u << 16)
@@ -4932,14 +4984,22 @@ static void ip_occ_reset(void) { memset(ip_occ_key, 0, sizeof ip_occ_key); }
 
 static uint64_t ip_last_base;  // ip_key's last key without its occurrence, and that occurrence
 static uint32_t ip_last_occ;
+// The draw's occurrence is counted per draw (its identity), not per cbuf slot: a draw that leaves a slot unbound (one
+// of the tall grass' 31 draws binds no vertex cbuf 4) put that slot's count one behind the others for every draw after
+// it - each grass clump then took its neighbour's matrices (cbuf 4) with its own camera (cbuf 3), and was blended
+// towards it: clumps squashed and shifted, holes in the grass in the in-between images while walking.
+static uint32_t ip_occ_next(uint64_t sig) {
+    if (!sig) sig = 1;
+    uint32_t s = (uint32_t)(sig ^ (sig >> 29)) & (IP_TAB - 1);
+    while (ip_occ_key[s] && ip_occ_key[s] != sig) s = (s + 1) & (IP_TAB - 1);
+    if (!ip_occ_key[s]) { ip_occ_key[s] = sig; ip_occ[s] = 0; }
+    return ip_occ[s]++;
+}
 static uint64_t ip_key(int stage, int k) {
     uint64_t base = ip_mix(ip_mix(ip_draw_sig, (uint64_t)stage), (uint64_t)k);
     if (!base) base = 1;
-    uint32_t s = (uint32_t)(base ^ (base >> 29)) & (IP_TAB - 1);
-    while (ip_occ_key[s] && ip_occ_key[s] != base) s = (s + 1) & (IP_TAB - 1);
-    if (!ip_occ_key[s]) { ip_occ_key[s] = base; ip_occ[s] = 0; }
-    ip_last_base = base, ip_last_occ = ip_occ[s];
-    return ip_mix(base, ip_occ[s]++);
+    ip_last_base = base, ip_last_occ = ip_draw_occ;
+    return ip_mix(base, ip_draw_occ);
 }
 
 static const IpEntry *ip_find(const IpFrame *f, uint64_t key) {
@@ -4954,18 +5014,23 @@ static const IpEntry *ip_find(const IpFrame *f, uint64_t key) {
 }
 
 static void ip_frame_clear(IpFrame *f) {
-    f->n = 0; f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false;
+    f->n = 0; f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false; f->ndr = 0; f->dr_sorted = false;
+    if (f->drtab) memset(f->drtab, 0, IP_TAB * sizeof *f->drtab);
     if (f->tab) memset(f->tab, 0, IP_TAB * sizeof *f->tab);
 }
 
-static void ip_record(uint64_t key, const void *data, uint32_t size) {
+static void ip_record(uint64_t key, const void *data, uint32_t size, int stage, int k) {
     IpFrame *f = &ipf[ipc];
     if (!f->tab) f->tab = calloc(IP_TAB, sizeof *f->tab);
     if (f->n >= IP_TAB / 2) { f->overflow = true; return; }
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 4096; f->e = realloc(f->e, f->cap * sizeof *f->e); }
     if (f->used + size > f->dcap) { f->dcap = (f->used + size) * 2 + (1 << 20); f->data = realloc(f->data, f->dcap); }
     memcpy(f->data + f->used, data, size);
-    f->e[f->n] = (IpEntry){key, (uint32_t)f->used, size, st.obj};
+    f->e[f->n] = (IpEntry){key, (uint32_t)f->used, size, st.obj, (uint8_t)stage, (uint8_t)k};
+    if (f->ndr) {  // (one more cbuf of the draw being recorded)
+        IpDraw *d = &f->dr[f->ndr - 1];
+        if (d->sig == ip_draw_sig && d->occ == ip_draw_occ && d->first + d->count == f->n) d->count++;
+    }
     f->used += size;
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
     while (f->tab[s]) s = (s + 1) & (IP_TAB - 1);
@@ -4996,10 +5061,12 @@ static uint32_t ip_pick(uint64_t base, uint32_t occ, const IpEntry *n) {
     const uint32_t *nd = (const uint32_t *)(ipf[ipc].data + n->off);
     uint32_t pick = occ;
     float best = INFINITY;
+    int gap = 0;
     for (uint32_t i = 0; i < 1024; i++) {
         uint32_t c = i == 0 ? occ : i - 1 < occ ? i - 1 : i;  // (this occurrence first, then all the others)
         const IpEntry *o = ip_find(f, ip_mix(base, c));
-        if (!o) { if (i > 0) break; continue; }
+        if (!o) { if (i > 0 && ++gap > 8) break; continue; }  // (draws that leave this slot unbound: gaps)
+        gap = 0;
         if (o->size != n->size) continue;
         float d = mvo_dist((const uint32_t *)(f->data + o->off), nd, n->size / 4, best);
         if (d < best) best = d, pick = c;
@@ -5008,24 +5075,154 @@ static uint32_t ip_pick(uint64_t base, uint32_t occ, const IpEntry *n) {
     return pick;
 }
 
+// A whole buffer that jumps between a (N-1) and b (N): a word changed by more than ip_jumps allows (3D draws)
+static bool ip_buf_jumps(const uint32_t *a, const uint32_t *b, uint32_t nw) {
+    for (uint32_t i = 0; i < nw; i++) {
+        if (a[i] == b[i]) continue;
+        uint32_t ea = (a[i] >> 23) & 0xFF, eb = (b[i] >> 23) & 0xFF;
+        if (!ea || !eb || ea == 0xFF || eb == 0xFF) continue;
+        float fa, fb;
+        memcpy(&fa, &a[i], 4);
+        memcpy(&fb, &b[i], 4);
+        if (ip_jumps(fa, fb)) return true;
+    }
+    return false;
+}
+
+// The recorded frame's draws (draw_, before its cbufs): looked up by (identity, occurrence) and by shape
+static void ip_draw_record(void) {
+    IpFrame *f = &ipf[ipc];
+    if (f->ndr >= IP_TAB / 2) { f->overflow = true; return; }
+    if (!f->drtab) f->drtab = calloc(IP_TAB, sizeof *f->drtab);
+    if (f->ndr == f->drcap) { f->drcap = f->drcap ? f->drcap * 2 : 4096; f->dr = realloc(f->dr, f->drcap * sizeof *f->dr); }
+    f->dr[f->ndr] = (IpDraw){ip_draw_sig, ip_draw_shape, ip_draw_occ, f->n, 0};
+    uint64_t key = ip_mix(ip_draw_sig, ip_draw_occ);
+    uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
+    while (f->drtab[s]) s = (s + 1) & (IP_TAB - 1);
+    f->drtab[s] = ++f->ndr;
+}
+static const IpDraw *ip_draw_find(const IpFrame *f, uint64_t sig, uint32_t occ) {
+    if (!f->drtab) return NULL;
+    uint64_t key = ip_mix(sig, occ);
+    uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
+    while (f->drtab[s]) {
+        const IpDraw *d = &f->dr[f->drtab[s] - 1];
+        if (d->sig == sig && d->occ == occ) return d;
+        s = (s + 1) & (IP_TAB - 1);
+    }
+    return NULL;
+}
+// How far draw c (N-1) is from draw n (N): all their cbufs, which must be the same slots and sizes (else infinite);
+// stops past `limit`
+static float ip_draw_dist(const IpDraw *n, const IpDraw *c, float limit) {
+    const IpFrame *fn = &ipf[ipc], *fc = &ipf[ipc ^ 1];
+    if (c->count != n->count || !n->count) return INFINITY;
+    float d = 0;
+    for (uint32_t i = 0; i < n->count && d < limit; i++) {
+        const IpEntry *en = &fn->e[n->first + i], *ec = &fc->e[c->first + i];
+        if (en->stage != ec->stage || en->k != ec->k || en->size != ec->size) return INFINITY;
+        d += mvo_dist((const uint32_t *)(fc->data + ec->off), (const uint32_t *)(fn->data + en->off), en->size / 4, limit - d);
+    }
+    return d;
+}
+static bool ip_draw_jumps(const IpDraw *n, const IpDraw *c) {
+    const IpFrame *fn = &ipf[ipc], *fc = &ipf[ipc ^ 1];
+    for (uint32_t i = 0; i < n->count; i++) {
+        const IpEntry *en = &fn->e[n->first + i], *ec = &fc->e[c->first + i];
+        if (ip_buf_jumps((const uint32_t *)(fc->data + ec->off), (const uint32_t *)(fn->data + en->off), en->size / 4)) return true;
+    }
+    return false;
+}
+static const IpFrame *ip_shape_frame;
+static int ip_shape_cmp(const void *x, const void *y) {
+    uint64_t a = ip_shape_frame->dr[*(const uint32_t *)x].shape, b = ip_shape_frame->dr[*(const uint32_t *)y].shape;
+    return a < b ? -1 : a > b;
+}
+// Which of the previous frame's draws this 3D draw is (the replay, before its cbufs): of the draws of the same shape
+// (program and arguments, any vertex buffer address or object), the one whose cbufs, all of them together, are closest
+// to this draw's - its own identity and occurrence first, kept unless another is closer; none that jumps. Picked by one
+// cbuf at a time (the first), a cbuf every copy shares decided nothing: the tall grass' 63 clumps have the same camera
+// cbuf (3) and their own offsets in the next (4), and ties took any clump's offsets - clumps squashed, shifted and
+// missing in the in-between images while walking (offsets 252 -> 49 units where the wind moves them 1 or 2). The game
+// also reuses vertex buffers between copies, so the address in the identity can name another copy.
+static void ip_pair_draw(void) {
+    IpFrame *fc = &ipf[ipc ^ 1];
+    const IpDraw *n = ip_draw_find(&ipf[ipc], ip_draw_sig, ip_draw_occ);
+    if (!n || !n->count || !fc->ndr) return;
+    const IpDraw *o0 = ip_draw_find(fc, ip_draw_sig, ip_draw_occ), *best = o0;
+    float bd = o0 ? ip_draw_dist(n, o0, INFINITY) : INFINITY;
+    if (bd > 0) {
+        if (!fc->dr_sorted) {
+            if (fc->dr_by_shape_cap < fc->ndr)
+                fc->dr_by_shape_cap = fc->ndr * 2, fc->dr_by_shape = realloc(fc->dr_by_shape, fc->dr_by_shape_cap * sizeof *fc->dr_by_shape);
+            for (uint32_t i = 0; i < fc->ndr; i++) fc->dr_by_shape[i] = i;
+            ip_shape_frame = fc;
+            qsort(fc->dr_by_shape, fc->ndr, sizeof *fc->dr_by_shape, ip_shape_cmp);
+            fc->dr_sorted = true;
+        }
+        uint32_t lo = 0, hi = fc->ndr;
+        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (fc->dr[fc->dr_by_shape[m]].shape < n->shape) lo = m + 1; else hi = m; }
+        for (uint32_t i = lo, tried = 0; i < fc->ndr && tried < 2048 && bd > 0; i++, tried++) {
+            const IpDraw *c = &fc->dr[fc->dr_by_shape[i]];
+            if (c->shape != n->shape) break;
+            if (c == o0) continue;
+            float d = ip_draw_dist(n, c, bd);
+            if (d < bd) bd = d, best = c;
+        }
+    }
+    if (best && best != o0 && ip_draw_jumps(n, best)) best = o0;  // (the closest jumps: the identity's own, if any)
+    if (!best) return;
+    if (best != o0) ip_stats_content++;
+    ip_part_set = true, ip_part_sig = best->sig, ip_part_occ = best->occ;
+}
+
 static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     if (stage > 1) return NULL;
     uint64_t key = ip_key(stage, k);
-    if (!ip_replaying) { ip_record(key, (const void *)(uintptr_t)addr, size); return NULL; }
+    static const char *sig_args = (const char *)1;
+    if (sig_args == (const char *)1) sig_args = getenv("LARECOMP_INTERP_SIG_ARGS");  // (only draws whose identity has this text; any size)
+    if (ip_sig_dbg && (sig_args ? strstr(ip_sig_txt, sig_args) != NULL : (long)size == ip_sig_dbg)) {
+        LOG("[interp-sig] present %llu stage %d cbuf %d occ %u 3d %d: %s\n", (unsigned long long)renderer_present_count(), stage, k,
+            ip_last_occ, (int)ip_draw_obj, ip_sig_txt);
+        if (getenv("LARECOMP_INTERP_SIG_DUMP") && (long)ip_last_occ < atol(getenv("LARECOMP_INTERP_SIG_DUMP"))) {  // (its words, as floats)
+            const float *fv = (const float *)(uintptr_t)addr;
+            static char line[40000]; int ln = 0;
+            for (uint32_t i = 0; i < size / 4 && ln < 39000; i++) ln += snprintf(line + ln, sizeof line - ln, " %g", fv[i]);
+            LOG("[interp-sig]   words:%s\n", line);
+        }
+    }
+    if (!ip_replaying) { ip_record(key, (const void *)(uintptr_t)addr, size, stage, k); return NULL; }
     const IpEntry *n = ip_find(&ipf[ipc], key);
-    if (!ip_pick_set) ip_pick_occ = ip_pick(ip_last_base, ip_last_occ, n), ip_pick_set = true;
-    const IpEntry *o = ip_find(&ipf[ipc ^ 1], ip_mix(ip_last_base, ip_pick_occ));
+    const IpEntry *o;
+    if (ip_part_set) o = ip_find(&ipf[ipc ^ 1], ip_mix(ip_mix(ip_mix(ip_part_sig, (uint64_t)stage), (uint64_t)k), ip_part_occ));
+    else {
+        if (!ip_pick_set) ip_pick_occ = ip_pick(ip_last_base, ip_last_occ, n), ip_pick_set = true;
+        o = ip_find(&ipf[ipc ^ 1], ip_mix(ip_last_base, ip_pick_occ));
+    }
     static int diag = -1;
     if (diag < 0) diag = getenv("LARECOMP_INTERP_DIAG") ? 1 : 0;
     IpDiag *dg = diag ? ip_diag_for(stage, k, size) : NULL;
     if (dg) { dg->draws++; if (ip_draw_obj) dg->tagged++; if (!o) dg->nomatch++; }
     if (!n) return NULL;
     const uint8_t *nd = ipf[ipc].data + n->off;
+    {   // LARECOMP_INTERP_KEEP_OBJ=<hex object> (research): that object's draws keep frame N's constants
+        static uint64_t keep_obj = 1;
+        if (keep_obj == 1) keep_obj = getenv("LARECOMP_INTERP_KEEP_OBJ") ? strtoull(getenv("LARECOMP_INTERP_KEEP_OBJ"), NULL, 16) : 0;
+        if (keep_obj && st.obj == keep_obj) return nd;
+    }
+    if (ip_draw_obj && ip_obj_rejected(st.obj ? st.obj : 1)) ip_kept_why = 2;
     if (!ip_draw_obj || ip_obj_rejected(st.obj ? st.obj : 1)) { ip_stats[1]++; return nd; }  // interface and other draws no object owns: their order and text change between frames, a blend smears them
-    if (!o || o->size != n->size) { ip_stats[1]++; return nd; }
+    if (!o || o->size != n->size) { ip_stats[1]++; if (!ip_kept_why) ip_kept_why = 1; return nd; }
     static uint32_t buf[0x10000 / 4];
     const uint32_t *a = (const uint32_t *)(ipf[ipc ^ 1].data + o->off), *b = (const uint32_t *)nd;
     uint32_t nw = n->size / 4;
+    {   // which vec4s changed from N-1 to N, kept with N's entry: the next frame's replay tells held values by it
+        uint64_t chg = 0;
+        for (uint32_t i = 0; i < nw && i < 256; i++) if (a[i] != b[i]) chg |= 1ull << (i / 4);
+        ((IpEntry *)n)->chg = chg, ((IpEntry *)n)->chg_known = true;
+    }
+    static int held_off = -1;  // (LARECOMP_INTERP_NO_HELD=1: research, held values blended like the others)
+    if (held_off < 0) held_off = getenv("LARECOMP_INTERP_NO_HELD") != NULL;
     // A jump anywhere in the buffer (a bone, a matrix row) keeps all of it at N: blending the rest would pull part of a
     // skeleton or of a matrix halfway and leave the other part, which stretches the model.
     for (uint32_t i = 0; i < nw; i++) {
@@ -5038,6 +5235,7 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
         bool jump = ip_draw_2d ? fabsf(fb - fa) > 0.3f * fmaxf(fabsf(fa), fabsf(fb)) && fabsf(fb - fa) > 0.02f  // (2D: a big move is a recycled row or glyph, not motion)
                                : ip_jumps(fa, fb);
         if (jump) {
+            if (!ip_kept_why) ip_kept_why = 3;
             if (dg) dg->jumps += nw;
             ip_stats[1]++;
             return nd;
@@ -5061,6 +5259,15 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
             else if (ip_jumps(fa, fb)) jump++;
         }
         if (dg) { dg->words += m; dg->changed += changed; }
+        // A vec4 that held still from N-2 to N-1 and changes now is a step between states, not motion: a sprite's frame
+        // in an atlas (the Pokémon's icons in the team screen, the cursor), an expression or a blink (eyes) - blended,
+        // the in-between images sampled half-way across the atlas, a mix of two frames or a neighbour's cell (flicker).
+        // It switches half-way instead. Motion changes every frame and is blended.
+        if (!bad && !jump && changed && !held_off && g < 256 && o->chg_known && !(o->chg & (1ull << (g / 4)))) {
+            for (uint32_t i = g; i < g + m; i++) buf[i] = ip_t < 0.5f ? a[i] : b[i];
+            ip_stats_held += changed;
+            continue;
+        }
         if (!bad && !jump) {
             for (uint32_t i = g; i < g + m; i++) {
                 if (a[i] == b[i]) { buf[i] = b[i]; continue; }
@@ -5079,6 +5286,23 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     }
     if (n->size > nw * 4) memcpy((uint8_t *)buf + nw * 4, nd + nw * 4, n->size - nw * 4);
     ip_stats[0]++;
+    {   // LARECOMP_INTERP_FAR_LOG=<units> (research): blended words this far from frame N's, per draw
+        static float far = -1;
+        if (far < 0) far = getenv("LARECOMP_INTERP_FAR_LOG") ? (float)atof(getenv("LARECOMP_INTERP_FAR_LOG")) : 0;
+        if (far > 0) {
+            float mx = 0; uint32_t at = 0;
+            for (uint32_t i = 0; i < nw; i++) {
+                float x, y; memcpy(&x, &buf[i], 4); memcpy(&y, &b[i], 4);
+                if (isfinite(x) && isfinite(y) && fabsf(x - y) > mx) mx = fabsf(x - y), at = i;
+            }
+            if (mx > far) {
+                float x, y, z; memcpy(&x, &a[at], 4); memcpy(&y, &b[at], 4); memcpy(&z, &buf[at], 4);
+                LOG("[interp-far] present %llu t %.2f stage %d cbuf %d size %u occ %u%s: word %u N-1 %g N %g blended %g (%s)\n",
+                    (unsigned long long)renderer_present_count(), ip_t, stage, k, size, ip_draw_occ, ip_part_set ? " (by content)" : "",
+                    at, x, y, z, ip_sig_txt);
+            }
+        }
+    }
     return buf;
 }
 
@@ -5346,6 +5570,11 @@ static void ip_cam_restore(void) {
 void vk_interp_replay(float t) {
     IpFrame *cur = &ipf[ipc];
     ip_t = t;
+    {   // LARECOMP_INTERP_TFIX=<t> (research): every in-between image at that t (1: should be frame N itself)
+        static float tf = -2;
+        if (tf == -2) tf = getenv("LARECOMP_INTERP_TFIX") ? (float)atof(getenv("LARECOMP_INTERP_TFIX")) : -1;
+        if (tf >= 0) ip_t = tf;
+    }
     ip_cam_save();
     mvo_replay_begin();
     __typeof__(st) end = st;
@@ -5362,9 +5591,10 @@ void vk_interp_replay(float t) {
     st.rt_dirty = true;
     ip_stats[3]++;
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept (replays %llu)\n",
+        LOG("[interp] frame %llu: %llu blended, %llu without a match, %llu words kept, %llu stepped, %llu draws paired by content (replays %llu)\n",
             (unsigned long long)vk_frame_counter(), (unsigned long long)ip_stats[0], (unsigned long long)ip_stats[1],
-            (unsigned long long)ip_stats[2], (unsigned long long)ip_stats[3]);
+            (unsigned long long)ip_stats[2], (unsigned long long)ip_stats_held, (unsigned long long)ip_stats_content,
+            (unsigned long long)ip_stats[3]);
     if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
     if (ip_stats[3] % 300 == 1)
         LOG("[interp] draws with an object %llu, without %llu\n", (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged);
