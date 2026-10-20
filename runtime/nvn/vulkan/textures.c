@@ -1140,6 +1140,50 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     return s;
 }
 
+// The sampler of d with `bias` more mip bias (exec.c texture_info: TAA / FSR 3.1), mipmapped and linearly filtered
+// ones only; the others, d's own. Kept by description and bias (the bias takes few values: steps of 0.25), never freed -
+// d is copied by value into the sampler pools.
+VkSampler vk_sampler_biased(NvnSamplerDesc *d, float bias) {
+    uint32_t mf = d->min_filter;
+    if (bias == 0 || !(mf == 3 || mf == 5) || d->compare_mode) return vk_sampler(d);
+    typedef struct { NvnSamplerDesc d; float bias; VkSampler s; } Biased;
+    static Biased *tab;
+    static uint32_t cap, n;
+    NvnSamplerDesc k = *d;
+    k.backend = NULL;
+    uint64_t h = 0xcbf29ce484222325ull;
+    const uint8_t *kb = (const uint8_t *)&k;
+    for (size_t i = 0; i < sizeof k; i++) h = (h ^ kb[i]) * 0x100000001B3ull;
+    uint32_t bq = (uint32_t)(int32_t)lroundf(bias * 4);
+    h = (h ^ bq) * 0x100000001B3ull;
+    if (n * 2 >= cap) {  // (open addressing, grown at half full)
+        uint32_t ncap = cap ? cap * 2 : 512;
+        Biased *nt = calloc(ncap, sizeof *nt);
+        for (uint32_t i = 0; i < cap; i++) {
+            if (!tab[i].s) continue;
+            uint64_t hh = 0xcbf29ce484222325ull;
+            const uint8_t *b = (const uint8_t *)&tab[i].d;
+            for (size_t j = 0; j < sizeof tab[i].d; j++) hh = (hh ^ b[j]) * 0x100000001B3ull;
+            hh = (hh ^ (uint32_t)(int32_t)lroundf(tab[i].bias * 4)) * 0x100000001B3ull;
+            uint32_t sl = (uint32_t)hh & (ncap - 1);
+            while (nt[sl].s) sl = (sl + 1) & (ncap - 1);
+            nt[sl] = tab[i];
+        }
+        free(tab);
+        tab = nt, cap = ncap;
+    }
+    uint32_t sl = (uint32_t)h & (cap - 1);
+    while (tab[sl].s) {
+        if (tab[sl].bias == bias && !memcmp(&tab[sl].d, &k, sizeof k)) return tab[sl].s;
+        sl = (sl + 1) & (cap - 1);
+    }
+    NvnSamplerDesc b = k;
+    b.lod_bias += bias;
+    tab[sl] = (Biased){k, bias, sampler_create(&b, false)};
+    n++;
+    return tab[sl].s;
+}
+
 VkSampler vk_default_sampler(bool linear) {
     static VkSampler s[2];
     if (!s[linear]) {

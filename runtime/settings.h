@@ -18,7 +18,7 @@ float settings_fsr3_ratio(void);  // 1.0, 1.5, 1.7, 2.0, 3.0
 // window bilinearly (the upscaler follows: settings_apply_levels)
 enum { AA_OFF = 0, AA_SMAA = 1, AA_TAA = 2, AA_FSR3 = 3 };
 // SSAO and GI quality (F12 menu): their parameters follow (settings_apply_levels); HIGH = the former defaults
-enum { FX_OFF = 0, FX_LOW = 1, FX_MEDIUM = 2, FX_HIGH = 3 };
+enum { FX_OFF = 0, FX_LOW = 1, FX_MEDIUM = 2, FX_HIGH = 3, FX_ULTRA = 4 };  // (ultra: SSAO only - high plus light contact shadows)
 enum { VREAD_AUTO = 0, VREAD_COPY = 1, VREAD_DIRECT = 2 };
 // the game's (each of its taps a hard in / out), each tap bilinear (2x2 PCF), each tap a 3x3 tent (4 bilinear lookups)
 enum { SHADOW_GAME = 0, SHADOW_BILINEAR = 1, SHADOW_SMOOTH = 2 };
@@ -43,6 +43,10 @@ typedef struct {
     float ssao_intensity; // 0..3 (default 2)
     float ssao_radius;    // in the game's world units (~cm): 10..400 (default 100)
     bool ssao_temporal;   // accumulated over frames along the camera motion vectors (exec.c ssao_run)
+    bool contact_shadows; // short rays toward the sun in the depth: small objects' shadows the shadow map misses (exec.c contact_run)
+    bool contact_on;      // (settings_apply_levels: the contact shadows run - their own setting, or SSAO ultra)
+    int contact_steps;    // ... their steps along a ray (16; SSAO ultra alone: 8)
+    float contact_strength;  // ... and how dark (0.5; SSAO ultra alone: 75 % of it)
     bool ssao_debug;      // (not saved) the scene shows the occlusion alone
     bool mv_debug;        // (not saved) the scene shows its camera motion vectors (runtime/nvn/vulkan/exec.c scene_hook)
     bool mv_objects;      // per-object motion vectors (characters' own motion) when motion vectors are in use (default on)

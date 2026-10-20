@@ -138,7 +138,7 @@ void ui_tab_select(int index) { g_tab_want = index; }
 
 // ------------------------------------------------------------------ the graphics page
 static const char *const *graphics_labels(int *n) {
-    static const char *l[8];
+    static const char *l[9];
     l[0] = UI_T("Frame rate limit", "Limite de quadros", "Лимит кадров");
     l[1] = UI_T("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)");
     l[2] = UI_T("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)");
@@ -147,7 +147,8 @@ static const char *const *graphics_labels(int *n) {
     l[5] = UI_T("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1");
     l[6] = UI_T("Frame generation", "Geração de quadros", "Генерация кадров");
     l[7] = UI_T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)", "Резкость (AMD RCAS)");
-    *n = 8;
+    l[8] = UI_T("Contact shadows", "Sombras de contato", "Контактные тени");
+    *n = 9;
     return l;
 }
 
@@ -184,13 +185,34 @@ void ui_page_graphics(float x, bool known) {
     const char *lv[] = {UI_T("Off", "Desligado", "Выкл."), UI_T("Low", "Baixo", "Низкое"), UI_T("Medium", "Médio", "Среднее"),
                         UI_T("High", "Alto", "Высокое")};
     ui_row(l[1], x);
-    ImGui::Combo("##ssao_lv", &g_settings.ssao_level, lv, 4);
+    {   // (SSAO only: ultra = high plus light contact shadows, settings_apply_levels)
+        const char *lv5[] = {lv[0], lv[1], lv[2], lv[3], "Ultra"};
+        ImGui::Combo("##ssao_lv", &g_settings.ssao_level, lv5, 5);
+        if (ImGui::IsItemHovered() && g_settings.ssao_level == FX_ULTRA)
+            ImGui::SetTooltip("%s", UI_T("High, plus light contact shadows (8 steps, 75% strength).",
+                                         "Alto, mais sombras de contato leves (8 passos, 75% da intensidade).",
+                                         "Высокое плюс лёгкие контактные тени (8 шагов, 75% силы)."));
+    }
     ui_row(l[2], x);
     ImGui::Combo("##gi_lv", &g_settings.gi_level, lv, 4);
     // the shadow map's filter (runtime/nvn/vulkan/textures.c vk_sampler, runtime/nvn/maxwell/translate.c shpcf)
     const char *sh[] = {UI_T("Game's", "Do jogo", "Как в игре"), UI_T("Bilinear", "Bilinear", "Билинейный"), UI_T("Smooth", "Suave", "Мягкий")};
     ui_row(l[3], x);
     ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, sh, 3);
+    // screen-space contact shadows toward the sun (runtime/nvn/vulkan/exec.c contact_run)
+    {
+        const char *o[] = {UI_T("Off", "Desligado", "Выкл."), UI_T("On", "Ligado", "Вкл.")};
+        int cur = g_settings.contact_shadows ? 1 : 0;
+        ui_row(l[8], x);
+        if (ImGui::Combo("##contact", &cur, o, 2)) g_settings.contact_shadows = cur == 1;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", UI_T("Short shadows where objects touch the ground (feet, grass, small props) that the game's "
+                                         "shadow map is too coarse to show.",
+                                         "Sombras curtas onde os objetos tocam o chão (pés, grama, objetos pequenos) que o mapa de "
+                                         "sombras do jogo é grosseiro demais para mostrar.",
+                                         "Короткие тени там, где предметы касаются земли (ноги, трава, мелкие объекты), которые "
+                                         "карта теней игры слишком груба, чтобы показать."));
+    }
     ImGui::Separator();
     // anti-aliasing: SMAA on the final image (the interface too), TAA on the scene (jittered, motion vectors:
     // runtime/nvn/vulkan/exec.c taa_run) or FSR 3.1 (temporal, the interface masked: exec.c, fsr3.cpp), the last one
@@ -231,13 +253,16 @@ void ui_page_graphics(float x, bool known) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", UI_T("Images per frame of the world (60 fps x 2 = 120). Each extra image costs about half as much "
                                          "as drawing the scene again, and the window shows the game one frame later. Auto: as many as "
-                                         "the display's refresh shows evenly (60 fps at 240 Hz: 4x), fewer when the GPU can't keep up.",
+                                         "the display's refresh shows evenly (60 fps at 240 Hz: 4x); when the GPU can't keep up, the extra images "
+                                         "are drawn at a lower resolution first, then fewer of them.",
                                          "Imagens por quadro do mundo (60 fps x 2 = 120). Cada imagem a mais custa cerca de metade do que "
                                          "desenhar a cena de novo, e a janela mostra o jogo um quadro depois. Auto: tantas quantas a "
-                                         "frequência da tela mostra por igual (60 fps a 240 Hz: 4x), menos quando a GPU não acompanha.",
+                                         "frequência da tela mostra por igual (60 fps a 240 Hz: 4x); quando a GPU não acompanha, as imagens a "
+                                         "mais são desenhadas primeiro numa resolução menor, depois em menor número.",
                                          "Кадров на кадр мира (60 fps x 2 = 120). Каждый дополнительный кадр стоит примерно половину "
                                          "повторной отрисовки сцены, а окно показывает игру на кадр позже. Авто: столько, сколько частота "
-                                         "экрана показывает равномерно (60 fps при 240 Гц: 4x), меньше, если GPU не успевает."));
+                                         "экрана показывает равномерно (60 fps при 240 Гц: 4x); если GPU не успевает, дополнительные кадры "
+                                         "сначала рисуются в меньшем разрешении, затем их становится меньше."));
     }
     settings_apply_levels();
 }

@@ -58,7 +58,7 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_FG_AT=<present>:<k>,...` | muda a geração de quadros para k (0, 1 = Auto, 2, 3, 4) naqueles presents, como o menu F12 |
 | `LARECOMP_FG_DISPLAY_HZ=<hz>` | (pesquisa) a geração de quadros Auto escolhe o multiplicador como se a tela tivesse essa frequência (sem ela: a do compositor do Windows, `[fg] auto: ...` no log) |
 | `LARECOMP_FG_VRR=1` | a tela tem frequência variável (G-Sync / FreeSync): as imagens agendadas saem fora da grade de atualização e o Auto escolhe o maior multiplicador até a frequência, sem exigir que a divida por igual |
-| `LARECOMP_FG_SCALE=<f>` | (pesquisa) as imagens intermediárias renderizadas a f vezes o tamanho dos quadros reais em cada eixo (0,25..1; sem ela, sempre o tamanho inteiro). Um render target que a reexecução lê antes de desenhar é preenchido a partir do de tamanho inteiro (`[vk] reduced in-between images: ...`) |
+| `LARECOMP_FG_SCALE=<f>` | (pesquisa) as imagens intermediárias renderizadas a f vezes o tamanho dos quadros reais em cada eixo (0,25..1; sem ela, o tamanho inteiro - ou, no Auto, 75 % / 50 % quando a GPU não acompanha, antes de baixar o multiplicador: `[fg] auto: ...`). Um render target que a reexecução lê antes de desenhar é preenchido a partir do de tamanho inteiro (`[vk] reduced in-between images: ...`) |
 | `LARECOMP_LO_SHARP=<stops>` + `LARECOMP_LO_HIST=<peso>` | (pesquisa) as imagens intermediárias reduzidas sem FSR 3.1, refeitas contra a imagem de N: a força do RCAS depois (stops; negativo: sem RCAS; padrão 1 a 75 % e 0,9 a 50 % com SMAA, 1,3 e 1,15 com TAA) e o peso da imagem de N (padrão 0,9) |
 | `LARECOMP_PRESENT_LOG=<arquivo>` | CSV com cada imagem da janela: o present, quando a chamada saiu e quando chegou à tela (`VK_KHR_present_wait`, numa thread à parte): `id,frame,image,nimg,present_ms,shown_ms`. Mostra o ritmo da geração de quadros como ela é vista |
 | `LARECOMP_PENDING_LOG=1` | cada imagem agendada (geração de quadros) ao ser mostrada: o atraso sobre a sua hora e o avanço (`lead`) aprendido |
@@ -140,6 +140,10 @@ Tudo o que foi usado para diagnosticar o port. As variáveis de ambiente valem p
 | `LARECOMP_SCALE=<f>` | altura de render = 1080 x f (ignora o launcher). Com `LARECOMP_FPS=0` mede a folga da GPU |
 | `LARECOMP_SETTINGS=<arquivo>` | outro `larecomp.ini` (ex.: `smaa = 0` para comparar sem SMAA) |
 | `LARECOMP_ANISO=<n>` | filtragem anisotrópica forçada (padrão 16; 0 ou 1 = a do jogo) |
+| `LARECOMP_MIP_BIAS=<deslocamento>` | (pesquisa) o bias de mip das texturas do jogo com TAA / FSR 3.1: `log2(render / janela)` + esse deslocamento (padrão −1 com FSR 3.1, −0,5 com TAA; 0 desliga). Só texturas carregadas pela CPU em draws 3D (`[post] mip bias` no log) |
+| `LARECOMP_DEBAND=0` | (comparação) sem o debanding e o dither de um degrau de 8 bits do último pass (`deband.frag`) |
+| `LARECOMP_CONTACT_STRENGTH=<0..1>` | (pesquisa) a força das sombras de contato (padrão 0,5). Com `ssao_debug = 1` no ini e o SSAO desligado, a vista de depuração mostra só elas |
+| `LARECOMP_CONTACT_FLIP=1` | (pesquisa) inverte o y da direção do sol no espaço de vista das sombras de contato (o certo é o padrão: sombra sob os pés) |
 | `LARECOMP_SHADER_WAIT_MS=<ms>` | quanto um quadro pode esperar por shaders / pipelines em preparo antes de pular draws (padrão 20; 0 = nunca) |
 | `LARECOMP_HIDE_FIRST_FRAMES=<n>` | janela preta nos n primeiros presents (padrão 2: o flash azul da abertura; 0 mostra tudo) |
 | `LARECOMP_WINDOW_SHOT=<frame>` | grava a imagem **da janela** em `build/window.png` (o `LARECOMP_SHOT_AT` grava a imagem do jogo, antes da janela) |

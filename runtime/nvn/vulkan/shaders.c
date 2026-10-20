@@ -393,6 +393,33 @@ static const char *builtin_src(const char *name, int *stage) {
     }
     // FSR 1 RCAS: contrast-adaptive sharpening of the EASU output (same size). a.x = sharpness (exp2(-stops)),
     // b.xy = image size. The lobe is limited so the result stays inside the neighbours' range; noise is damped.
+    // Debanding, the last post pass (exec.c post_process_ex): the game's 8-bit targets show steps in smooth gradients
+    // (sky, fog, the menus' blurred backdrop). As mpv's / libplacebo's deband: around each pixel, at a random angle and
+    // distance within a radius, four taps; when their mean is within the threshold of the pixel (a step of a band, not
+    // an edge or a texture's detail) it takes the mean - twice, the second time twice as far and half the threshold.
+    // Then a triangular dither of one 8-bit step, fixed per pixel (not per frame: TAA, FSR and the in-between images
+    // see the same pattern). a = (1 / size, threshold), b = (size, radius in pixels).
+    if (!strcmp(name, "deband.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "float h12(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }\n"
+               "void main() {\n"
+               "  vec2 px = gl_FragCoord.xy, uv = px * pc.a.xy;\n"
+               "  vec3 c = texelFetch(t, ivec2(px), 0).rgb;\n"
+               "  for (int i = 1; i <= 2; i++) {\n"
+               "    float ang = h12(px + float(i) * 17.0) * 6.2831853;\n"
+               "    float rad = pc.b.z * float(i) * h12(px * 1.7 + float(i) * 31.0);\n"
+               "    vec2 d = vec2(cos(ang), sin(ang)) * rad * pc.a.xy, e = vec2(-d.y, d.x);\n"
+               "    vec3 m = 0.25 * (texture(t, uv + d).rgb + texture(t, uv - d).rgb + texture(t, uv + e).rgb + texture(t, uv - e).rgb);\n"
+               "    c = mix(c, m, step(abs(c - m), vec3(pc.a.z / float(i))));\n"
+               "  }\n"
+               "  float n = h12(px) + h12(px * 1.31 + 7.0) - 1.0;\n"
+               "  o = vec4(clamp(c + n / 255.0, 0.0, 1.0), 1.0);\n"
+               "}\n";
+    }
     if (!strcmp(name, "rcas.frag")) {
         *stage = STAGE_FRAGMENT;
         return "#version 450\n"
@@ -424,7 +451,8 @@ static const char *builtin_src(const char *name, int *stage) {
     // B / (z_ndc + A)); b.z = 1 when depth was stored as (z_ndc + 1) / 2 (NVN's -1..1 mode). Positions are rebuilt
     // in view space (x right, y as the image, z the distance: one handedness throughout), the normal from the nearer
     // neighbours (no smearing across silhouettes).
-    if (!strcmp(name, "ssao.frag") || !strcmp(name, "ssao_blur.frag") || !strcmp(name, "ssao_temporal.frag")) {
+    if (!strcmp(name, "ssao.frag") || !strcmp(name, "ssao_blur.frag") || !strcmp(name, "ssao_temporal.frag") ||
+        !strcmp(name, "contact.frag")) {
         *stage = STAGE_FRAGMENT;
         static const char *common =
             "#version 450\n"
@@ -434,7 +462,8 @@ static const char *builtin_src(const char *name, int *stage) {
         // b.x = radius (world units), b.y = intensity, b.w = the largest screen radius in pixels. c.y samples (8-16) on a
         // spiral turned per pixel (interleaved gradient noise; the blur evens it out), denser near the centre;
         // c.x turns it per frame too (temporal accumulation: other directions every frame).
-        static const char *ao =
+        // The pixel's view-space position c and normal n, rebuilt from the depth (the SSAO and the contact shadows)
+        static const char *surf =
             "layout(set = 0, binding = 0) uniform sampler2D dep;\n"
             "ivec2 sz;\n"
             "vec3 vpos(ivec2 p) {\n"
@@ -443,11 +472,9 @@ static const char *builtin_src(const char *name, int *stage) {
             "  vec2 ndc = (vec2(p) + 0.5) / vec2(sz) * 2.0 - 1.0;\n"
             "  return vec3(ndc.x * l / pc.a.x, ndc.y * l / pc.a.y, l);\n"
             "}\n"
-            "void main() {\n"
-            "  sz = textureSize(dep, 0);\n"
-            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
-            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
-            "  vec3 c = vpos(p), l = vpos(p - ivec2(1, 0)), r = vpos(p + ivec2(1, 0)), u = vpos(p - ivec2(0, 1)), d = vpos(p + ivec2(0, 1));\n"
+            "void surface(ivec2 p, out vec3 c, out vec3 n) {\n"
+            "  c = vpos(p);\n"
+            "  vec3 l = vpos(p - ivec2(1, 0)), r = vpos(p + ivec2(1, 0)), u = vpos(p - ivec2(0, 1)), d = vpos(p + ivec2(0, 1));\n"
             // A pixel whose two neighbours of a direction are both nearer or both farther is no plane: a crack or a sliver one
             // pixel wide (the seams between the ground's pieces and the path patches drawn ~2 units over it). At 4K a pixel
             // covers ~0.5 units of ground, so its normal came out nearly level, the ground around it occluded it, and every
@@ -463,8 +490,16 @@ static const char *builtin_src(const char *name, int *stage) {
             "  }\n"
             "  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;\n"
             "  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;\n"
-            "  vec3 n = normalize(cross(dx, dy));\n"
+            "  n = normalize(cross(dx, dy));\n"
             "  if (dot(n, c) > 0.0) n = -n;\n"
+            "}\n";
+        static const char *ao =
+            "void main() {\n"
+            "  sz = textureSize(dep, 0);\n"
+            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
+            "  vec3 c, n;\n"
+            "  surface(p, c, n);\n"
             "  float rad = pc.b.x;\n"
             "  float rpx = min(rad * pc.a.x / c.z * 0.5 * float(sz.x), pc.b.w);\n"
             "  if (rpx < 1.0) { o = vec4(1.0); return; }\n"
@@ -531,13 +566,44 @@ static const char *builtin_src(const char *name, int *stage) {
             "  }\n"
             "  o = vec4(mix(a, h, w), l, 0.0, 1.0);\n"
             "}\n";
-        static char *src[3];
-        int k = !strcmp(name, "ssao_blur.frag") ? 1 : !strcmp(name, "ssao_temporal.frag") ? 2 : 0;
+        // Contact shadows (exec.c contact_run; the graphics page): from each pixel a short ray toward the sun (c.xyz, view
+        // space as above; the light found in the shadow map's pass), b.w steps along b.x world units, jittered per
+        // pixel; a step behind the depth there by less than c.w (the thickness: not the far side of a wall) is in
+        // shadow, fainter the farther along the ray the hit. Surfaces facing away from the sun are left to the game's
+        // lighting. Out: 1 - b.y (the strength) in shadow, faded out with distance (the shadow map covers far away).
+        static const char *contact =
+            "void main() {\n"
+            "  sz = textureSize(dep, 0);\n"
+            "  ivec2 p = ivec2(gl_FragCoord.xy);\n"
+            "  if (texelFetch(dep, p, 0).r >= 0.999999) { o = vec4(1.0); return; }\n"
+            "  vec3 c, n;\n"
+            "  surface(p, c, n);\n"
+            "  vec3 L = normalize(pc.c.xyz);\n"
+            "  if (dot(n, L) < 0.05) { o = vec4(1.0); return; }\n"
+            "  float jit = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
+            "  vec3 st = c + n * (0.003 * c.z);\n"
+            "  int N = int(pc.b.w);\n"
+            "  float sh = 0.0;\n"
+            "  for (int i = 0; i < N; i++) {\n"
+            "    float t = (float(i) + jit) / float(N);\n"
+            "    vec3 q = st + L * (pc.b.x * t);\n"
+            "    if (q.z <= 1.0) break;\n"
+            "    vec2 uv = vec2(q.x * pc.a.x, q.y * pc.a.y) / q.z * 0.5 + 0.5;\n"
+            "    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) break;\n"
+            "    float dz = q.z - lin(texelFetch(dep, ivec2(uv * vec2(sz)), 0).r);\n"
+            "    if (dz > 0.002 * q.z && dz < pc.c.w) { sh = 1.0 - t * t; break; }\n"
+            "  }\n"
+            "  float fade = clamp(2.0 - c.z / 2000.0, 0.0, 1.0);\n"
+            "  o = vec4(1.0 - pc.b.y * sh * fade, 0.0, 0.0, 1.0);\n"
+            "}\n";
+        static char *src[4];
+        int k = !strcmp(name, "ssao_blur.frag") ? 1 : !strcmp(name, "ssao_temporal.frag") ? 2 : !strcmp(name, "contact.frag") ? 3 : 0;
         if (!src[k]) {
-            const char *body = k == 2 ? temporal : k ? blur : ao;
-            size_t n = strlen(common) + strlen(body) + 1;
+            const char *body = k == 3 ? contact : k == 2 ? temporal : k ? blur : ao;
+            const char *pre = k == 0 || k == 3 ? surf : "";
+            size_t n = strlen(common) + strlen(pre) + strlen(body) + 1;
             src[k] = malloc(n);
-            snprintf(src[k], n, "%s%s", common, body);
+            snprintf(src[k], n, "%s%s%s", common, pre, body);
         }
         return src[k];
     }

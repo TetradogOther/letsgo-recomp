@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Frame generation "Auto" lowers the in-between images' resolution before the multiplier**: when the GPU can't keep
+  up, the in-between images are rendered at 75 %, then 50 % of the real frames' size on each axis (half a second late
+  each), and only then the multiplier goes down a step (a second late), at full size again - 60 fps at 240 Hz: 4x at
+  100 / 75 / 50 %, then 2x at 100 / 75 / 50 %, each step cheaper than the one before (4K: 3.65 / 2.52 / 1.63 ms an
+  in-between image, detail within 1 - 3 % of the real frames). Back up as before. Measured at 60 fps, 240 Hz: 4x 100 ->
+  75 -> 50 % -> 2x, and up again to 4x at 50 % with room (`[fg] auto: 4x, in-between images at 75 % ...`).
+- **Contact shadows** (graphics page, off by default; `contact_shadows` in `larecomp.ini`): short rays toward the sun
+  in the scene's depth, for the shadows the game's 2048² shadow map is too coarse to show - under the feet, in the
+  grass, under a lamp's cap. The sun is the shadow map's own light (its pass's light matrix, by a vote over its draws).
+  Blurred along the depth like the SSAO, faded out in the distance; 0.9 ms at 4K.
+- **SSAO "Ultra"** (graphics page, after High; `ssao_level = 4`): High plus light contact shadows - 8 steps along their
+  rays and 75 % of their strength (0.54 ms at 4K, against 0.87 for the full ones). With the contact shadows' own
+  setting on too, theirs (16 steps, full strength).
+- **Sharper textures with TAA and FSR 3.1**: the game's textures in 3D draws take a negative mip bias while a temporal
+  resolve brings the detail back - AMD's `log2(render / display) - 1` with FSR 3.1 (native: -1), -0.5 with TAA - not
+  its render targets (bloom, the depth pyramid read at explicit levels) nor the interface. Detail +2.5 % at 720p.
+- **Debanding**: the last post pass smooths the 8-bit steps of smooth gradients (sky, fog, the menus' blurred backdrop)
+  and adds a fixed one-step dither; texture detail and edges left as they were (`LARECOMP_DEBAND=0` compares).
+- FSR 3.1 is given the real frame time (16.7 ms at 60 fps; it was always 33.3); the lead before the first in-between
+  image is capped at 16 ms on both presentation paths (one had 12).
+
 - **Anti-aliasing: FSR 3.1 is its last choice** (Off, SMAA, TAA, FSR 3.1), its mode and sharpening shown under it when
   picked; the upscaler row is gone. With the others a lower internal resolution reaches the window bilinearly (FSR 1
   stays only as FSR 3.1's fallback when its DLL is missing; an older `upscaler = fsr1` now loads as bilinear).

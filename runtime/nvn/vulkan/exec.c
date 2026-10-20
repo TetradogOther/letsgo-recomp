@@ -942,7 +942,13 @@ static uint64_t ui_final_frame;
 static VkImageView raw_view(TexBackend *b);
 static NvnTexture *shader_texture_object(int stage, ShaderTexture *st_);
 static bool fsr3_on(void);
+// Mip bias of the game's own textures while TAA or FSR 3.1 resolves the image (post_process_ex, texture_info): the
+// temporal accumulation brings back the detail of a finer mip level without its shimmer - AMD's guidance for FSR,
+// log2(render / display width) - 1 (native: -1; Quality, 1.5x: -1.58); TAA at native -0.5 (its history is shorter).
+// In steps of 0.25 (a sampler each), -2 .. 0. LARECOMP_MIP_BIAS=<offset> (research) replaces the -1 / -0.5; 0: none.
+static float g_mip_bias;
 static void ssao_run(void);
+static void sun_probe(void);  // (contact shadows: the shadow pass's light)
 // The debug views (F12: the occlusion alone, the motion vectors) replace the game image at the present, after the
 // game's own passes (fog, bloom, tone mapping): written into the scene they came out white or washed out.
 static TexBackend *debug_view;  // RGBA8 at the depth's size, written by ssao_run
@@ -1096,7 +1102,7 @@ static void begin_pass(void) {
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
     ao.qual = false;
-    if ((g_settings.ssao || g_settings.gi || mv_wanted()) && pass_ncolor && ca[0].imageView && has_d && pass_samples == 1 && st.rt.color[0]) {  // (TAA: mv_wanted)
+    if ((g_settings.ssao || g_settings.gi || g_settings.contact_on || mv_wanted()) && pass_ncolor && ca[0].imageView && has_d && pass_samples == 1 && st.rt.color[0]) {  // (TAA: mv_wanted)
         TexBackend *c0 = st.rt.color[0]->backend;
         VkFormat f = pass_color[0];
         if (c0 && c0->scalable && (f == VK_FORMAT_B10G11R11_UFLOAT_PACK32 || f == VK_FORMAT_R16G16B16A16_SFLOAT ||
@@ -2627,8 +2633,10 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
     uint32_t tic = h & 0xFFFFF, tsc = (uint32_t)(h >> 20) & 0xFFF;
     sc[0] = sc[1] = 1;
     wh[0] = wh[1] = 0;
+    NvnTexture *tx = NULL;  // (the texture bound, for the mip bias below)
     if (h && st.tpool && tic < (uint32_t)st.tpool->count) {
         NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
+        tx = e->tex;
         if (e->tex) {
             // Per-frame memo: ~2400 lookups per overworld frame recomputed the view (format / range math, cache
             // probe). The first lookup of a frame still runs vk_view (upload check); a view that may have been
@@ -2657,7 +2665,15 @@ static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo
                 }
         }
     }
-    if (h && st.spool && tsc < (uint32_t)st.spool->count) smp = vk_sampler(&((NvnSamplerDesc *)st.spool->entries)[tsc]);
+    if (h && st.spool && tsc < (uint32_t)st.spool->count) {
+        NvnSamplerDesc *sd = &((NvnSamplerDesc *)st.spool->entries)[tsc];
+        // The mip bias of TAA / FSR 3.1 (mip_bias): the 3D draws' textures the game loaded (not its render targets: a
+        // mip chain read at an explicit level - bloom, the depth pyramid - would shift by it too)
+        TexBackend *tb = tx ? (TexBackend *)tx->backend : NULL;
+        if (g_mip_bias != 0 && st.rt.depth && st.ds[0] && tb && !tb->gpu_owned && tb->levels > 1 && !sd->compare_mode)
+            smp = vk_sampler_biased(sd, g_mip_bias);
+        else smp = vk_sampler(sd);
+    }
     if (!view) view = vk_dummy_view(st_->type);
     if (!smp) smp = vk_default_sampler(true);
     *out = (VkDescriptorImageInfo){smp, view, VK_IMAGE_LAYOUT_GENERAL};
@@ -3242,6 +3258,7 @@ static void draw_(CmdRec *r, bool indexed) {
     snap_reason = "draw-colorwrite";
     for (int i = 0; i < st.rt.ncolor; i++)
         if (st.rt.color[i] && ((st.channel_mask >> (i * 4)) & 0xF)) snapshots_invalidate(st.rt.color[i]);
+    if (g_settings.contact_on) sun_probe();  // (the shadow map's light: the contact shadows' sun)
     begin_pass();
     if (ao.qual && ssao_draw_hook()) begin_pass();  // (the occlusion went in before this draw: the pass again)
     // per-object motion vectors: the scene pass's depth-tested draws that are opaque, or blended but writing depth (the
@@ -4078,12 +4095,13 @@ static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK
 // 14-19: GI (normals, work, history, debug: gi_run), 20: the scene pass's velocity target (per-object motion vectors), 21, 22: TAA history, 23: the scene depth as R32F, 24: FSR 3's output (storage), 25: the image
 // before the interface, 26: FSR 3's interface mask, 27: an in-between image's TAA result (its history left as it was),
 // 28, 29: N's SSAO / GI moved to an in-between image, 30: an in-between image resolved against N's FSR 3.1 output,
-// 31: that image sharpened. The in-between images at a reduced size (vk_tex_lo_begin) have a set of their own (32 on):
+// 31: that image sharpened, 32: debanding (the last post pass), 33, 34: contact shadows (mask, blur: contact_run), 35: their
+// debug view. The in-between images at a reduced size (vk_tex_lo_begin) have a set of their own (48 on):
 // sized for them, they were made again at every switch between a real frame and an in-between image, and the real
 // frames' histories (SSAO, GI, TAA) went with them.
 static TexBackend *post_image_fmt(int i, uint32_t w, uint32_t h, VkFormat fmt) {
-    static TexBackend img[64];
-    TexBackend *d = &img[i + (vk_tex_lo_active() ? 32 : 0)];
+    static TexBackend img[96];
+    TexBackend *d = &img[i + (vk_tex_lo_active() ? 48 : 0)];
     if (d->image && (d->width != w || d->height != h || d->format != fmt)) {
         vk_views_forget(d);
         vk_defer_image(d->image, d->mem);
@@ -4347,6 +4365,89 @@ static void gi_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, f
     }
 }
 
+// ---- Contact shadows (graphics page): short rays toward the sun in the scene's depth, for what the game's 2048² shadow
+// map is too coarse to show - feet, grass, small props on the ground. The sun is the shadow map's light: that pass (a
+// square depth target of its own, drawn before the scene) has in its draws' vertex cbuf 0 the light's view-projection
+// times the draw's model, column-major and orthographic (its last row 0 0 0 1, the other three at right angles); its
+// third row is the light's depth axis. The world's draws (no rotation of their own: most of them) agree on it: a vote
+// over the pass keeps theirs (Boyer-Moore majority). Pallet Town: (0.39, -0.82, -0.42), the sun high in front-left.
+static struct { float cand[3]; int votes; uint64_t frame; } sun;
+static void sun_probe(void) {
+    NvnTexture *dt = st.rt.depth;
+    if (!dt || dt->width != dt->height || dt->width < 512) return;
+    Range u = st.ubuf[0][0];
+    if (!u.addr || u.size < 64) return;
+    const float *m = (const float *)(uintptr_t)u.addr;
+    if (m[3] != 0 || m[7] != 0 || m[11] != 0 || m[15] != 1) return;
+    const float r[3][3] = {{m[0], m[4], m[8]}, {m[1], m[5], m[9]}, {m[2], m[6], m[10]}};
+    float len[3];
+    for (int i = 0; i < 3; i++) len[i] = sqrtf(r[i][0] * r[i][0] + r[i][1] * r[i][1] + r[i][2] * r[i][2]);
+    if (!(len[0] > 1e-12f && len[1] > 1e-12f && len[2] > 1e-12f)) return;
+    for (int i = 0; i < 3; i++)
+        for (int j = i + 1; j < 3; j++)
+            if (fabsf(r[i][0] * r[j][0] + r[i][1] * r[j][1] + r[i][2] * r[j][2]) > 1e-3f * len[i] * len[j]) return;
+    float d[3] = {r[2][0] / len[2], r[2][1] / len[2], r[2][2] / len[2]};
+    uint64_t fr = fx_frame();
+    if (sun.frame != fr) sun.frame = fr, sun.votes = 0;
+    bool same = fabsf(d[0] - sun.cand[0]) < 1e-3f && fabsf(d[1] - sun.cand[1]) < 1e-3f && fabsf(d[2] - sun.cand[2]) < 1e-3f;
+    if (!sun.votes) memcpy(sun.cand, d, sizeof d), sun.votes = 1;
+    else sun.votes += same ? 1 : -1;
+}
+// Toward the sun in the world, this frame's (false: no shadow map this frame - an interior without sun, a menu)
+static bool sun_dir(uint64_t fr, float out[3]) {
+    if (sun.frame != fr || sun.votes <= 0) return false;
+    float s = sun.cand[1] > 0 ? 1.0f : -1.0f;  // (the light travels along its depth axis, downward: toward it is up)
+    for (int i = 0; i < 3; i++) out[i] = sun.cand[i] * s;
+    return true;
+}
+// After the occlusion (ssao_run): the shadows, blurred along the depth as the occlusion is, multiplied onto the scene
+static void contact_run(VkCommandBuffer cb, VkImageView dv, uint32_t w, uint32_t h, float mo, uint64_t fr) {
+    float L[3];
+    uint32_t bs = ao.scene_size[ao.scene_cur];
+    if (!sun_dir(fr, L) || ao.poff < 64 || ao.poff > bs) return;
+    // into the view space the shaders rebuild from the depth (x right, y as the image's rows, z the distance): the
+    // camera's rigid view (row-major, the 64 bytes before the projection in the scene block: mv_capture_camera) is GL's,
+    // looking down -z, its y the rows' (checked on the shadows alone, ssao_debug: under the player's feet and a lamp's
+    // cap with it; above the grass clumps with y turned). LARECOMP_CONTACT_FLIP=1 (research) turns y the other way.
+    float v[16];
+    memcpy(v, ao.scene[ao.scene_cur] + ao.poff - 64, sizeof v);
+    float lv[3];
+    for (int r = 0; r < 3; r++) lv[r] = v[r * 4] * L[0] + v[r * 4 + 1] * L[1] + v[r * 4 + 2] * L[2];
+    static float flip = 0, env_strength = -2;
+    if (!flip) flip = getenv("LARECOMP_CONTACT_FLIP") ? -1.0f : 1.0f;
+    if (env_strength == -2) env_strength = getenv("LARECOMP_CONTACT_STRENGTH") ? (float)atof(getenv("LARECOMP_CONTACT_STRENGTH")) : -1;
+    float strength = env_strength >= 0 ? env_strength : g_settings.contact_strength;
+    // (a ray of 60 units - the player's feet to the knees -, 16 steps (8 with SSAO ultra: settings_apply_levels); a hit
+    // counts within 30 units behind the depth)
+    float pc[12] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 60.0f, strength, mo, (float)g_settings.contact_steps,
+                    lv[0], flip * lv[1], -lv[2], 30.0f};
+    VkPipeline p_c = post_pipeline("contact.frag"), p_blur = post_pipeline("ssao_blur.frag");
+    VkPipeline p_apply = post_pipeline_ex("ssao_apply.frag", ao.cfmt, 1);
+    TexBackend *m0 = post_image(33, w, h), *m1 = post_image(34, w, h);
+    gp_mark(cb, "ours: contact shadows%s", ip_replaying ? " (in-between)" : "");
+    post_pass_view(cb, p_c, &dv, 1, post_view(m0), w, h, pc, sizeof pc, false, false);
+    float pb[8] = {ao.proj[0], ao.proj[1], ao.proj[2], ao.proj[3], 1, 0, mo, 0};
+    VkImageView bx[4] = {post_view(m0), dv};
+    post_pass_view(cb, p_blur, bx, 2, post_view(m1), w, h, pb, 32, false, false);
+    pb[4] = 0, pb[5] = 1;
+    VkImageView by[4] = {post_view(m1), dv};
+    post_pass_view(cb, p_blur, by, 2, post_view(m0), w, h, pb, 32, false, false);
+    VkImageView ai[4] = {post_view(m0)};
+    if (g_settings.ssao_debug && !g_settings.ssao) {  // (the shadows alone when the occlusion is off: ssao_debug's view)
+        TexBackend *enc = post_image(35, w, h);
+        float pe[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h};
+        post_pass_view(cb, post_pipeline("ssao_apply.frag"), ai, 1, post_view(enc), w, h, pe, 32, false, false);
+        debug_view = enc, debug_view_frame = fr;
+    }
+    float pa[8] = {0, 0, 0, 0, 1.0f / (float)ao.cw, 1.0f / (float)ao.ch};
+    post_pass_view(cb, p_apply, ai, 1, ao.cview, ao.cw, ao.ch, pa, 32, false, true);
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        LOG("[contact] sun %.3f %.3f %.3f (world), %.3f %.3f %.3f (view)\n", L[0], L[1], L[2], pc[8], pc[9], pc[10]);
+    }
+}
+
 // The scene hook (outside any pass: vk_end_pass), once per frame as the scene pass ends: camera motion vectors, the
 // indirect light, then the occlusion - from the depth at its size -> blur across -> blur down ->
 // multiplied onto the scene's colour. The debug views replace the colour (the motion vectors' last).
@@ -4452,6 +4553,7 @@ static void ssao_run(void) {
         }
         }
     }
+    if (g_settings.contact_on) contact_run(cb, dv, w, h, mo, fr);
     if (mv && g_settings.mv_debug) {  // (x right red, y up green, still: grey; 16 x velocity; shown at the present)
         TexBackend *enc = post_image(13, w, h);
         float ps[8] = {0, 0, 0, 0, 1.0f / (float)w, 1.0f / (float)h, 16, 0};
@@ -4583,6 +4685,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
 static VkImageView post_process(VkCommandBuffer cb, TexBackend *b, double ow_d, double oh_d) {
     return post_process_ex(cb, b, ow_d, oh_d, NULL);
 }
+extern uint64_t fps60_period_ns(void);  // (runtime/hle/fps60.c: the game's frame time now)
 // res (may be NULL): the image behind the view returned (b when nothing was done)
 static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_d, double oh_d, TexBackend **res) {
     post_last_ow = ow_d, post_last_oh = oh_d;
@@ -4611,7 +4714,21 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
     bool color = fabsf(grade[0] - 1) > 0.005f || fabsf(grade[1] - 1) > 0.005f || fabsf(grade[2] - 1) > 0.005f;
     bool sharpen = taa_on() && !fsr && !fsr3 && g_settings.taa_sharpness > 0.01f;  // (TAA softens)
     if (!fsr3) fsr3_engaged = false;
-    if (!smaa && !fsr && !color && !sharpen && !fsr3) { if (res) *res = rb_; return v; }
+    if (!ip_side_post) {  // (the real frames': the in-between images are rendered from the same constants)
+        static float env = -100;
+        if (env == -100) env = getenv("LARECOMP_MIP_BIAS") ? (float)atof(getenv("LARECOMP_MIP_BIAS")) : -99;
+        bool temporal = fsr3 || taa_on();
+        float off = env != -99 ? env : fsr3 ? -1.0f : -0.5f;
+        float mb = temporal && off != 0 ? log2f((float)b->width / (float)ow) + off : 0;
+        mb = roundf(mb * 4) / 4;
+        mb = mb < -2 ? -2 : mb > 0 ? 0 : mb;
+        if (mb != g_mip_bias) LOG("[post] mip bias %.2f\n", mb);
+        g_mip_bias = mb;
+    }
+    // Debanding and a dither of one 8-bit step, last (deband.frag): on unless LARECOMP_DEBAND=0 (comparison)
+    static int deband = -1;
+    if (deband < 0) deband = getenv("LARECOMP_DEBAND") ? atoi(getenv("LARECOMP_DEBAND")) : 1;
+    if (!smaa && !fsr && !color && !sharpen && !fsr3 && !deband) { if (res) *res = rb_; return v; }
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
     vk_frame_suspend();
@@ -4686,7 +4803,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
                           // the vectors are this uv - the previous one; FSR takes previous - this, in pixels
                           .mv_scale_x = -(float)b->width, .mv_scale_y = -(float)b->height,
                           .near_ = B / (A - 1), .far_ = B / (A + 1), .fov_y = 2.0f * atanf(1.0f / ao.proj[1]),
-                          .meters_per_unit = 0.01f, .frame_ms = 33.3f, .sharpness = g_settings.fsr3_sharpness,
+                          .meters_per_unit = 0.01f, .frame_ms = (float)(fps60_period_ns() / 1e6), .sharpness = g_settings.fsr3_sharpness,
                           .reset = !ao.prev_ok};
         if (nh) {
             TexBackend *so = post_image(30, ow, oh);
@@ -4733,6 +4850,14 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
         post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
         v = post_view(r), rb_ = r;
     }
+    if (deband) {  // (at the final size: the radius, 12 pixels at 1080p, follows it)
+        uint32_t dw = rb_->width, dh = rb_->height;
+        TexBackend *d = post_image(32, dw, dh);
+        float pd[8] = {1.0f / (float)dw, 1.0f / (float)dh, 1.25f / 255.0f, 0, (float)dw, (float)dh, 12.0f * (float)dh / 1080.0f};
+        VkImageView di[3] = {v};
+        post_pass(cb, "deband.frag", di, 1, d, pd, false);
+        v = post_view(d), rb_ = d;
+    }
     vk_full_barrier(cb);
     vk_frame_resume();
     if (res) *res = rb_;
@@ -4740,9 +4865,9 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
         static uint32_t piw, pih, pow_, poh;
         static int psm = -1, pfs = -1;
         int f = fsr3 && fsr3_engaged ? 3 : fsr;
-        if (b->width != piw || b->height != pih || ow != pow_ || oh != poh || smaa != psm || f != pfs)
+        if (!ip_side_post && (b->width != piw || b->height != pih || ow != pow_ || oh != poh || smaa != psm || f != pfs))
             LOG("[post] %ux%u%s%s -> %ux%u\n", b->width, b->height, smaa ? " smaa" : "", f == 3 ? " fsr3.1" : f ? " fsr1" : "", ow, oh);
-        piw = b->width; pih = b->height; pow_ = ow; poh = oh; psm = smaa; pfs = f;
+        if (!ip_side_post) piw = b->width, pih = b->height, pow_ = ow, poh = oh, psm = smaa, pfs = f;  // (the real frames')
     }
     return v;
 }
@@ -5796,15 +5921,17 @@ static TexBackend *ip_keep_image(TexBackend *b, int slot) {
     k->raw_ok = true;
     return &k->raw;
 }
-// The in-between images' render size, x the real frames' on each axis: full, or LARECOMP_FG_SCALE=<f> (research; it
-// was a setting for a while, left out: the frame generation keeps the real frames' look). Measured at 4K (FSR 3.1 native, SSAO, GI high), GPU per in-between image:
+// The in-between images' render size, x the real frames' on each axis: full, frame generation "Auto"'s own when the GPU
+// is behind (ip_auto_mult: 75 %, then 50 %, before a lower multiplier), or LARECOMP_FG_SCALE=<f> (research, fixed).
+// Measured at 4K (FSR 3.1 native, SSAO, GI high), GPU per in-between image:
 // 3.65 ms at full size, 2.52 at 75 %, 1.63 at 50 % (the game's scene pass 1.27 / 0.79 / 0.41); detail within 1 - 3 % of
 // the real frames (RCAS adjusted: ip_side_sharp_stops), halfway placement the same (93 % of the moving blocks); flicker
 // 1.60 / 1.66 / 1.89 % of the blocks (the walk in the grass, 3x).
+static float ip_auto_scale = 1;  // (frame generation "Auto": this present's, ip_auto_mult)
 static float ip_lo_factor(void) {
     static float env = -1;
     if (env < 0) env = getenv("LARECOMP_FG_SCALE") ? (float)atof(getenv("LARECOMP_FG_SCALE")) : 0;
-    float f = env > 0 ? env : 1.0f;
+    float f = env > 0 ? env : g_settings.frame_gen == FG_AUTO ? ip_auto_scale : 1.0f;
     return f < 0.25f ? 0.25f : f > 1 ? 1 : f;
 }
 // A reduced in-between image without FSR 3.1, back to N's size (post image 30 of the reduced set): N's image taken
@@ -5885,8 +6012,12 @@ static TexBackend *hold_copy_into(TexBackend *d, TexBackend *src) {
 // rate the display's refresh shows evenly (60 fps at 240 Hz: 4x, 240 images a second, one every refresh; 3x would be
 // 180, every 1.33 refreshes - uneven), the largest first; none even (60 fps at 144 Hz): the largest at or below the
 // refresh. With variable refresh (LARECOMP_FG_VRR=1: the display shows any rate evenly) the largest at or below it.
-// Then the GPU: when the frames come late (the measured period 8 % over the game's for a second's presents in a row:
-// the in-between images cost more than the GPU has) the next candidate down - not in the 3 s after the game's rate
+// Then the GPU: when the frames come late (the measured period 8 % over the game's for half a second's presents in a
+// row: the in-between images cost more than the GPU has) the in-between images are rendered smaller first - 75 %, then
+// 50 % of the real frames' size on each axis (ip_lo_factor; at 4K 3.65 / 2.52 / 1.63 ms an image, detail within 1 - 3 %
+// of the real frames) - and only then the next candidate down, at full size again (60 fps at 240 Hz: 4x at 100 / 75 /
+// 50 %, then 2x at 100 / 75 / 50 %: each step costs less than the one before; 4x at 50 % is 4.9 ms, 2x at full size
+// 3.65) - a lower multiplier after a second late; none in the 3 s after the game's rate
 // changed (entering the world: the loading's hitches and shader builds came down to 2x for 10 s); back up after 10 s on time, the wait doubling
 // each time it had to come down again within 5 s of going up (up to 2 min) - as the dynamic resolution does
 // (output_scale.c). Measured at 4K (FSR 3.1 native, SSAO, GI high, 240 Hz): 60 fps x 4 needs ~16.8 ms of GPU a frame
@@ -5910,8 +6041,11 @@ static int ip_auto_mult(uint64_t period) {
     for (int m = 4; m >= 2 && !nc; m--)
         if (fps * m <= hz * 1.01) cand[nc++] = m;
     if (!nc) cand[nc++] = 2;
-    // the GPU keeping up: by the presents' period against the game's own for this frame
-    static int level, late, good, last_m;
+    // the GPU keeping up: by the presents' period against the game's own for this frame. Level l: candidate l / 3 at
+    // the (l % 3)-th size
+    static const float scales[3] = {1.0f, 0.75f, 0.5f};
+    int nl = nc * 3;
+    static int level, late, good, last_level = -1;
     static double wait_s = 10, last_raise_t = -100;
     static uint64_t last_t;
     static double key_hz, key_fps, key_want, grace_until;
@@ -5923,7 +6057,8 @@ static int ip_auto_mult(uint64_t period) {
     if (last_t && now - last_t < 200000000ull && want > 0 && t >= grace_until) {  // (not after a pause: loading, a menu's stop)
         if ((double)period > want * 1.08) { late++; good = 0; }
         else { good++; if ((double)period < want * 1.03) late = 0; }
-        if (late >= (int)(1e9 / want) && level < nc - 1) {
+        double late_s = (level + 1) % 3 ? 0.5 : 1.0;  // (a smaller size after half a second late, a lower multiplier after one)
+        if (late >= (int)(late_s * 1e9 / want) && level < nl - 1) {
             level++, late = good = 0;
             if (t - last_raise_t < 5) wait_s = fmin(wait_s * 2, 120);
         } else if (level > 0 && good >= (int)(wait_s * 1e9 / want)) {
@@ -5931,12 +6066,14 @@ static int ip_auto_mult(uint64_t period) {
         }
     }
     last_t = now;
-    if (level >= nc) level = nc - 1;
-    int m = cand[level];
-    if (m != last_m) {
-        LOG("[fg] auto: %dx (display %.0f Hz%s, world %.0f fps%s; frames every %.1f ms for %.1f)\n", m, hz,
-            vrr ? ", variable refresh" : "", fps, level ? ", the GPU behind: lowered" : "", period / 1e6, want / 1e6);
-        last_m = m;
+    if (level >= nl) level = nl - 1;
+    int m = cand[level / 3];
+    ip_auto_scale = scales[level % 3];
+    if (level != last_level) {
+        LOG("[fg] auto: %dx, in-between images at %.0f %% (display %.0f Hz%s, world %.0f fps%s; frames every %.1f ms for %.1f)\n",
+            m, ip_auto_scale * 100, hz, vrr ? ", variable refresh" : "", fps, level ? ", the GPU behind: lowered" : "",
+            period / 1e6, want / 1e6);
+        last_level = level;
     }
     return m;
 }

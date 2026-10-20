@@ -733,7 +733,6 @@ static void present_image(TexBackend *b, bool final, int image, int nimg, uint64
             }
         extern void vk_present_log_tag(uint64_t frame, int image, int nimg);
         vk_present_log_tag(frame, image, nimg);
-        vk_present_log_tag(frame, image, nimg);
         vk_frame_end(path);
         g_window_images++;
         if (final && shot && getenv("LARECOMP_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
@@ -755,6 +754,13 @@ typedef struct { TexBackend *b; bool final; int image, nimg; uint64_t frame, due
 static Pending pend[16];
 static int pend_n;
 static uint64_t ip_lead = 2000000;  // ns from the present's time on the timeline to its first image
+// An image shown at its time (sequence seq on the GPU): not done by then, more lead (up to 16 ms: at 4K the GPU finishes
+// a present's images 9 - 12.5 ms after it); done, a little less, slowly
+static void lead_adapt(uint64_t seq) {
+    extern uint64_t vk_completed_seq(void);
+    if (vk_completed_seq() < seq) ip_lead = ip_lead + 250000 > 16000000 ? 16000000 : ip_lead + 250000;
+    else if (ip_lead > 500000) ip_lead -= 5000;
+}
 
 // A scheduled image to the window: drawn ahead (pre: presented from present_q - the next frame's work on the main queue
 // doesn't hold it up), or drawn now
@@ -773,13 +779,7 @@ static pthread_mutex_t pq_lk = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pq_cv = PTHREAD_COND_INITIALIZER;
 static void pq_show(const Pending *p, bool other_thread) {
     if (p->gen != g_sc_gen) return;
-    if (p->seq) {  // (the GPU not done with it by its time: more lead; done: a little less, slowly)
-        extern uint64_t vk_completed_seq(void);
-        uint64_t l = ip_lead;
-        if (vk_completed_seq() < p->seq) l = l + 250000 > 16000000 ? 16000000 : l + 250000;
-        else if (l > 500000) l -= 5000;
-        ip_lead = l;
-    }
+    if (p->seq) lead_adapt(p->seq);
     present_swap_image(p->sc_img, present_q, p->frame, p->image, p->nimg, other_thread);
 }
 static void *present_main(void *arg) {
@@ -838,11 +838,7 @@ void vk_pending_run(bool all) {
         if (!all && pend[0].due > SDL_GetTicksNS()) return;
         Pending p = pend[0];
         memmove(pend, pend + 1, (size_t)--pend_n * sizeof *pend);
-        if (p.seq && !all) {  // (the GPU not done with it by its time: more lead; done: a little less, slowly)
-            extern uint64_t vk_completed_seq(void);
-            if (vk_completed_seq() < p.seq) ip_lead = ip_lead + 250000 > 12000000 ? 12000000 : ip_lead + 250000;
-            else if (ip_lead > 500000) ip_lead -= 5000;
-        }
+        if (p.seq && !all) lead_adapt(p.seq);
         static int plog = -1;  // LARECOMP_PENDING_LOG=1: each scheduled image's lateness when it is shown
         if (plog < 0) plog = getenv("LARECOMP_PENDING_LOG") != NULL;
         if (plog) {
