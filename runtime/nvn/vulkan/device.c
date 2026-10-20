@@ -855,10 +855,34 @@ void vk_pending_run(bool all) {
 
 // The display's refresh (Windows: the compositor's timing, DwmGetCompositionTimingInfo): the last vertical blank on
 // SDL's clock and the period, in ns; false when unknown
+// The display's refresh rate (Windows' compositor timing), read at most once a second; 0 when unknown (frame
+// generation "Auto": exec.c ip_auto_mult)
+double vk_display_hz(void) {
+#ifdef _WIN32
+    static double hz;
+    static uint64_t at;
+    uint64_t now = SDL_GetTicksNS();
+    if (at && now - at < 1000000000ull) return hz;
+    at = now;
+    DWM_TIMING_INFO ti = {.cbSize = sizeof ti};
+    if (DwmGetCompositionTimingInfo(NULL, &ti) == S_OK && ti.rateRefresh.uiDenominator && ti.rateRefresh.uiNumerator)
+        hz = (double)ti.rateRefresh.uiNumerator / ti.rateRefresh.uiDenominator;
+    else if (DwmGetCompositionTimingInfo(NULL, &ti) == S_OK && ti.qpcRefreshPeriod) {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        hz = (double)f.QuadPart / (double)ti.qpcRefreshPeriod;
+    }
+    return hz;
+#else
+    return 0;
+#endif
+}
+
 static bool vblank_grid(uint64_t *vb, uint64_t *vp) {
 #ifdef _WIN32
     static int off = -1;
-    if (off < 0) off = getenv("LARECOMP_FG_NO_VSYNC_GRID") != NULL;
+    // (LARECOMP_FG_VRR=1: variable refresh shows each image when it comes - no grid to wait for)
+    if (off < 0) off = getenv("LARECOMP_FG_NO_VSYNC_GRID") != NULL || getenv("LARECOMP_FG_VRR") != NULL;
     if (off) return false;
     DWM_TIMING_INFO ti = {.cbSize = sizeof ti};
     if (DwmGetCompositionTimingInfo(NULL, &ti) != S_OK || !ti.qpcRefreshPeriod || !ti.qpcVBlank) return false;
@@ -1034,7 +1058,7 @@ void backend_present(NvnTexture *t) {
         for (const char *p = e; p && *p;) {
             long at = strtol(p, (char **)&p, 10);
             int k = *p == ':' ? (int)strtol(p + 1, (char **)&p, 10) : 0;
-            if (at == (long)total_frames) { g_settings.frame_gen = k >= 2 && k <= 4 ? k : 0; LOG("[vk] frame generation %d (LARECOMP_FG_AT)\n", k); }
+            if (at == (long)total_frames) { g_settings.frame_gen = (k >= 2 && k <= 4) || k == FG_AUTO ? k : 0; LOG("[vk] frame generation %d (LARECOMP_FG_AT)\n", k); }
             if (*p == ',') p++; else break;
         }
     }

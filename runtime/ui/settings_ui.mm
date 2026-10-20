@@ -138,17 +138,16 @@ void ui_tab_select(int index) { g_tab_want = index; }
 
 // ------------------------------------------------------------------ the graphics page
 static const char *const *graphics_labels(int *n) {
-    static const char *l[9];
+    static const char *l[8];
     l[0] = UI_T("Frame rate limit", "Limite de quadros", "Лимит кадров");
     l[1] = UI_T("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)");
     l[2] = UI_T("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)");
     l[3] = UI_T("Shadow filter", "Filtro das sombras", "Фильтр теней");
     l[4] = UI_T("Anti-aliasing", "Antisserrilhado", "Сглаживание");
-    l[5] = UI_T("Upscaler", "Escalonador", "Масштабирование");
-    l[6] = UI_T("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1");
-    l[7] = UI_T("Frame generation", "Geração de quadros", "Генерация кадров");
-    l[8] = UI_T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)", "Резкость (AMD RCAS)");
-    *n = 9;
+    l[5] = UI_T("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1");
+    l[6] = UI_T("Frame generation", "Geração de quadros", "Генерация кадров");
+    l[7] = UI_T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)", "Резкость (AMD RCAS)");
+    *n = 8;
     return l;
 }
 
@@ -193,37 +192,14 @@ void ui_page_graphics(float x, bool known) {
     ui_row(l[3], x);
     ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, sh, 3);
     ImGui::Separator();
-    // anti-aliasing: SMAA on the final image (the interface too) or TAA on the scene (jittered, motion vectors:
-    // runtime/nvn/vulkan/exec.c taa_run). FSR 3.1 is picked as the upscaler (one place): temporal (jittered scene,
-    // motion vectors, the interface masked: exec.c, fsr3.cpp), it anti-aliases too - settings.h keeps it as AA_FSR3 -
-    // so the anti-aliasing row only says so then; leaving FSR 3.1 brings back the anti-aliasing it replaced.
-    static int last_aa = AA_SMAA;
-    if (g_settings.antialias != AA_FSR3) last_aa = g_settings.antialias;
-    ui_row(l[4], x);
-    if (g_settings.antialias == AA_FSR3) {
-        ImGui::BeginDisabled();
-        if (ImGui::BeginCombo("##aa", UI_T("Included in FSR 3.1", "Incluído no FSR 3.1", "Входит в FSR 3.1"))) ImGui::EndCombo();
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", UI_T("FSR 3.1 anti-aliases on its own. Pick another upscaler to choose SMAA or TAA.",
-                                         "O FSR 3.1 já faz o antisserrilhado. Escolha outro escalonador para usar SMAA ou TAA.",
-                                         "FSR 3.1 сам сглаживает. Выберите другое масштабирование для SMAA или TAA."));
-    } else {
-        const char *aa[] = {UI_T("Off", "Desligado", "Выкл."), "SMAA", "TAA"};
-        if (ImGui::Combo("##aa", &g_settings.antialias, aa, 3)) settings_apply_levels();
-    }
+    // anti-aliasing: SMAA on the final image (the interface too), TAA on the scene (jittered, motion vectors:
+    // runtime/nvn/vulkan/exec.c taa_run) or FSR 3.1 (temporal, the interface masked: exec.c, fsr3.cpp), the last one
+    // upscaling too, with its mode below. With the others a lower internal resolution is scaled bilinearly
+    // (settings_apply_levels).
     {
-        const char *up[] = {UI_T("Bilinear", "Bilinear", "Билинейный"), "FSR 1", "FSR 3.1"};
-        int u = g_settings.antialias == AA_FSR3 ? 2 : g_settings.upscaler_pick == UPSCALE_BILINEAR ? 0 : 1;
-        ui_row(l[5], x);
-        if (ImGui::Combo("##up", &u, up, 3)) {
-            if (u == 2) g_settings.antialias = AA_FSR3;
-            else {
-                g_settings.upscaler_pick = u ? UPSCALE_SHARP : UPSCALE_BILINEAR;
-                if (g_settings.antialias == AA_FSR3) g_settings.antialias = last_aa;
-            }
-            settings_apply_levels();
-        }
+        const char *aa[] = {UI_T("Off", "Desligado", "Выкл."), "SMAA", "TAA", "FSR 3.1"};
+        ui_row(l[4], x);
+        if (ImGui::Combo("##aa", &g_settings.antialias, aa, 4)) settings_apply_levels();
     }
     // FSR 3.1's presets: the render resolution is the window's divided by the ratio (runtime/nvn/output_scale.c)
     if (g_settings.antialias == AA_FSR3) {
@@ -232,12 +208,12 @@ void ui_page_graphics(float x, bool known) {
                             UI_T("Balanced (1.7x)", "Equilibrado (1,7x)", "Баланс (1,7x)"),
                             UI_T("Performance (2.0x)", "Desempenho (2,0x)", "Производительность (2,0x)"),
                             UI_T("Ultra Performance (3.0x)", "Ultra desempenho (3,0x)", "Макс. производительность (3,0x)")};
-        ui_row(l[6], x);
+        ui_row(l[5], x);
         ImGui::Combo("##fsr3p", &g_settings.fsr3_preset, pr, 5);
         // its sharpening: RCAS, AMD's robust contrast-adaptive sharpening (CAS) inside FSR 3.1 (exec.c post_process; the
         // frame generation's in-between images take it too)
         float pct = g_settings.fsr3_sharpness * 100;
-        ui_row(l[8], x);
+        ui_row(l[7], x);
         if (ImGui::SliderFloat("##fsr3s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.fsr3_sharpness = pct / 100;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", UI_T("FSR 3.1's own sharpening (RCAS, AMD's contrast-adaptive sharpening). 0% turns it off.",
@@ -245,19 +221,23 @@ void ui_page_graphics(float x, bool known) {
                                          "Собственная резкость FSR 3.1 (RCAS, адаптивное повышение резкости AMD). 0% — выкл."));
     }
     // Frame generation (exec.c frame interpolation): 2, 3 or 4 images per world frame, the in-between ones drawn by
-    // running the frame's draws again with their positions between the last frame's and this one's. Any GPU.
+    // running the frame's draws again with their positions between the last frame's and this one's; Auto: as many as the
+    // display's refresh shows evenly and the GPU keeps up with (exec.c ip_images). Any GPU.
     {
-        const char *fg[] = {UI_T("Off", "Desligado", "Выкл."), "2x", "3x", "4x"};
-        int cur = g_settings.frame_gen >= 2 && g_settings.frame_gen <= 4 ? g_settings.frame_gen - 1 : 0;
-        ui_row(l[7], x);
-        if (ImGui::Combo("##fg", &cur, fg, 4)) g_settings.frame_gen = cur ? cur + 1 : 0;
+        const char *fg[] = {UI_T("Off", "Desligado", "Выкл."), "Auto", "2x", "3x", "4x"};
+        int cur = g_settings.frame_gen == FG_AUTO ? 1 : g_settings.frame_gen >= 2 && g_settings.frame_gen <= 4 ? g_settings.frame_gen : 0;
+        ui_row(l[6], x);
+        if (ImGui::Combo("##fg", &cur, fg, 5)) g_settings.frame_gen = cur == 1 ? FG_AUTO : cur ? cur : 0;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", UI_T("Images per frame of the world (60 fps x 2 = 120). Each extra image costs about as much "
-                                         "as drawing the scene again, and the window shows the game one frame later.",
-                                         "Imagens por quadro do mundo (60 fps x 2 = 120). Cada imagem a mais custa quase o mesmo "
-                                         "que desenhar a cena de novo, e a janela mostra o jogo um quadro depois.",
-                                         "Кадров на кадр мира (60 fps x 2 = 120). Каждый дополнительный кадр стоит почти как "
-                                         "повторная отрисовка сцены, а окно показывает игру на кадр позже."));
+            ImGui::SetTooltip("%s", UI_T("Images per frame of the world (60 fps x 2 = 120). Each extra image costs about half as much "
+                                         "as drawing the scene again, and the window shows the game one frame later. Auto: as many as "
+                                         "the display's refresh shows evenly (60 fps at 240 Hz: 4x), fewer when the GPU can't keep up.",
+                                         "Imagens por quadro do mundo (60 fps x 2 = 120). Cada imagem a mais custa cerca de metade do que "
+                                         "desenhar a cena de novo, e a janela mostra o jogo um quadro depois. Auto: tantas quantas a "
+                                         "frequência da tela mostra por igual (60 fps a 240 Hz: 4x), menos quando a GPU não acompanha.",
+                                         "Кадров на кадр мира (60 fps x 2 = 120). Каждый дополнительный кадр стоит примерно половину "
+                                         "повторной отрисовки сцены, а окно показывает игру на кадр позже. Авто: столько, сколько частота "
+                                         "экрана показывает равномерно (60 fps при 240 Гц: 4x), меньше, если GPU не успевает."));
     }
     settings_apply_levels();
 }

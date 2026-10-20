@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **Anti-aliasing: FSR 3.1 is its last choice** (Off, SMAA, TAA, FSR 3.1), its mode and sharpening shown under it when
+  picked; the upscaler row is gone. With the others a lower internal resolution reaches the window bilinearly (FSR 1
+  stays only as FSR 3.1's fallback when its DLL is missing; an older `upscaler = fsr1` now loads as bilinear).
+- **Frame generation research: the in-between images at a lower resolution** (`LARECOMP_FG_SCALE=<f>`, docs/DEPURACAO.md;
+  the game always renders them at full size - it was a setting for a while, left out).
+  An in-between image renders the scene again, and at 4K that was most of its cost. Its replay can draw into smaller
+  twins of the game's scaled render targets (the scene, its depth, bloom, the composite: `runtime/nvn/vulkan/textures.c`
+  `vk_tex_lo_begin`; the game's code, viewports and our passes only see smaller targets), the result rebuilt on
+  frame N's full image: with FSR 3.1 the resolve against its output that was already there, otherwise the same resolve
+  against N's own image plus RCAS. Measured at 4K (FSR 3.1 native, SSAO, GI high), GPU per in-between image: 3.65 ms
+  full, 2.52 at 75 %, 1.63 at 50 % (SMAA: 3.08 / 2.61 / 1.82). Detail within 1 - 3 % of the real frames in every mode
+  (the RCAS after it set by the size), halfway placement the same (93 % of the moving blocks), flicker 1.60 / 1.66 /
+  1.85 % of the blocks with FSR 3.1 (SMAA 1.40 / 1.62 / 1.81 %).
+  Also: an in-between image with FSR 3.1 no longer copies the depth or builds the interface mask it didn't use.
+- **Frame generation "Auto"** (first after Off): as many images per world frame as the display's refresh shows evenly
+  - 60 fps at 240 Hz: 4x, one image every refresh; 30 fps: 4x (8x would also fit, 4x is the most); 60 fps at 144 Hz,
+  where none is even: the most at or below the refresh. When the GPU can't keep up (the frames a second late in a row)
+  it goes down a step and tries again after 10 s, the wait doubling up to 2 min if it had to come down again
+  (`[fg] auto: ...` in the log). Measured at 240 Hz (`LARECOMP_PRESENT_LOG`): 60 fps in a window, 4x throughout, 97.5 %
+  of the images one refresh apart; 30 fps at 4K full screen, 4x throughout, 86 % two refreshes apart; 60 fps at 4K full
+  screen, where 4x needs ~16.8 ms of GPU a frame (a fixed 4x drops the world to 50 fps and the images go uneven), 2x.
+  With a variable-refresh display, `LARECOMP_FG_VRR=1` drops the refresh grid (docs/DEPURACAO.md).
+- **Frame generation: the interface is never blended** - with frame generation on, every 2D draw (no depth test: the
+  interface, in the world and in menus) keeps frame N's constants in the in-between images, as the game draws it; the
+  60 fps mode's menus without frame generation still slide theirs. The per-object cut check now counts 3D draws only:
+  an interface element fading or scaling changes by large steps, and could cancel a frame's in-between images. What
+  stays at N can be looked for with a new research log (`LARECOMP_INTERP_KEPT_LOG`): walking in Pallet Town and Viridian
+  every 3D draw is paired and blended. Left as research, off: blending the vertex data the CPU writes
+  (`LARECOMP_INTERP_VTX`) - Viridian's flowers already came halfway, and it lost tall grass clumps.
+- **Frame generation: curved motion through three frames** - the in-between images followed a straight line from N-1 to
+  N, and at 30 fps x 4 the speed changed at each real frame. A value that moved in both of the last two steps, by a
+  smooth change (its acceleration at most a quarter of the steps), now follows the quadratic through N-2, N-1 and N
+  (the draws' constants, the camera, the scene block; N-1's partner in N-2 is the one its own replay paired - a third
+  frame is kept). Checked against the truth (a walk with turns at 120 fps; every 4th / 2nd frame taken as 30 / 60 and the
+  frames between predicted, the camera): at 30 x 4 mean error 0.203 -> 0.196 cm, 99th percentile 2.82 -> 2.55; at 60 x 2
+  mean 0.103 -> 0.090, never worse (with any acceleration it was worse at 60 in its worst 5 %: a step in the camera's
+  follow is not a curve). In the game: the turn at 30 x 4 flicker 3.68 -> 3.61 % of the blocks, the walk and the menus
+  the same. `LARECOMP_INTERP_CURVE=0` compares.
+
 - **Controller layout** (launcher, Game page): Nintendo (A on the right button, B on the bottom, as before) or Xbox (A
   on the bottom, B on the right, X on the left, Y on the top - the letters printed on an Xbox controller).
   `larecomp.ini`: `pad_layout = nintendo|xbox`. The layout sets the controller's default bindings; changing it moves

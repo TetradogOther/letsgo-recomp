@@ -90,9 +90,22 @@ typedef struct TexBackend {
     VkFormat ui2x_fmt;
     uint32_t ui2x_w, ui2x_h;
     uint64_t ui2x_hash;  // the guest data it was checked against (data_hash)
+    // The in-between images at a reduced size (textures.c vk_tex_lo_begin): a scaled render target's smaller twin (lo),
+    // which stands in for it while they are rendered; full: the twin's own target. lo_use: the twin's first use in this
+    // image (0 none yet, 1 rendered to, 2 read first); lo_seed: read before being rendered to, so filled from the full
+    // image first next time.
+    struct TexBackend *lo, *full;
+    uint8_t lo_use;
+    bool lo_seed;
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
+// The in-between images at f x the render size (exec.c vk_interp_replay): every scaled render target gives way to its
+// smaller twin until vk_tex_lo_end. vk_tex_lo(b): the twin standing in for b now (b itself outside).
+void vk_tex_lo_begin(float f);
+void vk_tex_lo_end(void);
+bool vk_tex_lo_active(void);
+TexBackend *vk_tex_lo(TexBackend *b);
 VkFormat vk_format(uint32_t nvn_format);
 bool vk_format_alpha_one(uint32_t nvn_format);
 // View of t (optionally through an NVN texture view) for rendering or sampling.

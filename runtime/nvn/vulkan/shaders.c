@@ -822,9 +822,10 @@ static const char *builtin_src(const char *name, int *stage) {
                "  vec4 v = texelFetch(mv, min(ivec2(vec2(np) * vec2(textureSize(mv, 0)) / vec2(sz)), textureSize(mv, 0) - 1), 0);\n"
                "  vec2 uv = (vec2(p) + 0.5) / vec2(sz), pu = uv - v.xy;\n"
                "  if (any(lessThan(pu, vec2(0.0))) || any(greaterThan(pu, vec2(1.0)))) { o = vec4(c, l); return; }\n"
-               "  float lh = texelFetch(h, clamp(ivec2(pu * vec2(sz)), ivec2(0), sz - 1), 0).a, le = v.z * l;\n"
+               "  ivec2 hs = textureSize(h, 0);\n"  // (an in-between image at a reduced size: N's history is larger)
+               "  float lh = texelFetch(h, clamp(ivec2(pu * vec2(hs)), ivec2(0), hs - 1), 0).a, le = v.z * l;\n"
                "  float keep = clamp(1.0 - (abs(lh - le) / max(le * 0.02, 2.0) - 1.0), 0.0, 1.0);\n"
-               "  vec3 hy = ycc(tm(cat(pu, vec2(sz))));\n"
+               "  vec3 hy = ycc(tm(cat(pu, vec2(hs))));\n"
                "  vec3 lo = m1 - 1.25 * sg, hi = m1 + 1.25 * sg, ce = 0.5 * (hi + lo), ex = 0.5 * (hi - lo) + 1e-4;\n"
                "  vec3 dv = (hy - ce) / ex;\n"
                "  float mx = max(abs(dv.x), max(abs(dv.y), abs(dv.z)));\n"

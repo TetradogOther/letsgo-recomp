@@ -113,7 +113,9 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "fsr3_preset"))
         g_settings.fsr3_preset = !strcmp(val, "native") ? FSR3_NATIVE_AA : !strcmp(val, "balanced") ? FSR3_BALANCED :
                                  !strcmp(val, "performance") ? FSR3_PERFORMANCE : !strcmp(val, "ultra") ? FSR3_ULTRA_PERFORMANCE : FSR3_QUALITY;
-    else if (!strcmp(key, "frame_gen")) g_settings.frame_gen = atoi(val) == 1 ? 2 : atoi(val);  // (1: an older on / off)
+    else if (!strcmp(key, "frame_gen"))  // (1: an older on / off)
+        g_settings.frame_gen = !strcmp(val, "auto") ? FG_AUTO : atoi(val) == 1 ? 2 : atoi(val);
+    else if (!strcmp(key, "fg_quality")) {}  // (a setting of a test version: the in-between images are always full size)
     else if (!strcmp(key, "render_thread")) g_settings.render_thread = atoi(val) != 0;
     else if (!strcmp(key, "vertex_read")) g_settings.vertex_read = !strcmp(val, "direct") ? VREAD_DIRECT : !strcmp(val, "copy") ? VREAD_COPY : VREAD_AUTO;
     else if (!strcmp(key, "dpad_move")) g_settings.dpad_move = atoi(val) != 0;
@@ -141,8 +143,8 @@ void settings_clamp_color(void) {
 // SSAO and GI by level (F12 menu). High: the parameters they had before the levels (SSAO 16 samples; GI 4 rays x 8
 // steps at half the scene's size). Medium and low keep the look (strength, reach, accumulation over frames) with less
 // work: SSAO 12 / 8 samples (the accumulation evens out the noise); GI 3 rays x 6 steps at half the size, 2 x 6 at a
-// third (about 1/2 and 1/6 of high's). The upscaler: FSR 3.1 when it is the anti-aliasing, else the one picked (FSR 1
-// or bilinear).
+// third (about 1/2 and 1/6 of high's). The upscaler: FSR 3.1 when it is the anti-aliasing, else bilinear (FSR 1 stays
+// only as FSR 3.1's fallback without its DLL: exec.c post_process).
 void settings_apply_levels(void) {
     int s = g_settings.ssao_level < FX_OFF || g_settings.ssao_level > FX_HIGH ? FX_OFF : g_settings.ssao_level;
     int g = g_settings.gi_level < FX_OFF || g_settings.gi_level > FX_HIGH ? FX_OFF : g_settings.gi_level;
@@ -156,9 +158,9 @@ void settings_apply_levels(void) {
     g_settings.gi_rays = gi_rays[g], g_settings.gi_steps = gi_steps[g], g_settings.gi_div = gi_div[g];
     g_settings.gi_intensity = 2.0f, g_settings.gi_radius = 300.0f, g_settings.gi_thickness = 25.0f, g_settings.gi_temporal = true;
     if (g_settings.antialias < AA_OFF || g_settings.antialias > AA_FSR3) g_settings.antialias = AA_SMAA;
-    if (g_settings.upscaler_pick != UPSCALE_BILINEAR) g_settings.upscaler_pick = UPSCALE_SHARP;
-    g_settings.upscaler = g_settings.antialias == AA_FSR3 ? UPSCALE_FSR3 : g_settings.upscaler_pick;
-    if (g_settings.frame_gen < 2 || g_settings.frame_gen > 4) g_settings.frame_gen = 0;
+    g_settings.upscaler_pick = UPSCALE_BILINEAR;
+    g_settings.upscaler = g_settings.antialias == AA_FSR3 ? UPSCALE_FSR3 : UPSCALE_BILINEAR;
+    if (g_settings.frame_gen != FG_AUTO && (g_settings.frame_gen < 2 || g_settings.frame_gen > 4)) g_settings.frame_gen = 0;
 }
 
 // One larecomp.ini line applied now, then the settings that follow from it (LARECOMP_SET_AT: runtime/nvn/vulkan/device.c)
@@ -207,12 +209,13 @@ void settings_save(void) {
     fprintf(f, "smaa = %d\n", g_settings.antialias != AA_OFF);
     fprintf(f, "aa = %s\n", g_settings.antialias == AA_FSR3 ? "fsr3" : g_settings.antialias == AA_TAA ? "taa" :
                             g_settings.antialias == AA_SMAA ? "smaa" : "off");
-    fprintf(f, "upscaler = %s\n", g_settings.upscaler_pick == UPSCALE_BILINEAR ? "bilinear" : "fsr1");  // (FSR 3.1: "aa")
+    fprintf(f, "upscaler = bilinear\n");  // (FSR 3.1: "aa"; for older versions)
     fprintf(f, "taa_sharpness = %.2f\n", g_settings.taa_sharpness);
     fprintf(f, "fsr3_sharpness = %.2f\n", g_settings.fsr3_sharpness);
     static const char *const presets[] = {"native", "quality", "balanced", "performance", "ultra"};
     fprintf(f, "fsr3_preset = %s\n", presets[g_settings.fsr3_preset >= 0 && g_settings.fsr3_preset <= 4 ? g_settings.fsr3_preset : 1]);
-    fprintf(f, "frame_gen = %d\n", g_settings.frame_gen);
+    if (g_settings.frame_gen == FG_AUTO) fprintf(f, "frame_gen = auto\n");
+    else fprintf(f, "frame_gen = %d\n", g_settings.frame_gen);
     fprintf(f, "mod = %s\n", g_settings.mod);
     fprintf(f, "mouse_sens = %.3f\n", g_settings.mouse_sens);
     fprintf(f, "stick_deadzone = %.2f\n", g_settings.stick_deadzone);

@@ -1,5 +1,8 @@
 // User settings (larecomp.ini in the data folder), set on the start screen (runtime/ui/launcher_lg.mm).
 #pragma once
+// frame_gen = auto ("auto" in larecomp.ini): the most images per world frame that the display's refresh shows evenly
+// and the GPU keeps up with (runtime/nvn/vulkan/exec.c ip_images)
+#define FG_AUTO 1
 #include <stdbool.h>
 
 enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12 };
@@ -11,7 +14,8 @@ enum { FSR3_NATIVE_AA = 0, FSR3_QUALITY = 1, FSR3_BALANCED = 2, FSR3_PERFORMANCE
 float settings_fsr3_ratio(void);  // 1.0, 1.5, 1.7, 2.0, 3.0
 #define UPSCALE_SHARP UPSCALE_FSR1  // the non-bilinear upscaler (the default)
 // TAA: temporal, on the game's HDR scene before its bloom (runtime/nvn/vulkan/exec.c taa_run), jittered draws
-// FSR 3.1 is the fourth choice: it anti-aliases and upscales (the upscaler follows: settings_apply_levels)
+// FSR 3.1 is the fourth choice: it anti-aliases and upscales; with the others a lower internal resolution reaches the
+// window bilinearly (the upscaler follows: settings_apply_levels)
 enum { AA_OFF = 0, AA_SMAA = 1, AA_TAA = 2, AA_FSR3 = 3 };
 // SSAO and GI quality (F12 menu): their parameters follow (settings_apply_levels); HIGH = the former defaults
 enum { FX_OFF = 0, FX_LOW = 1, FX_MEDIUM = 2, FX_HIGH = 3 };
@@ -26,7 +30,7 @@ typedef struct {
     int res_height;      // the launcher's render height in lines (720 / 1080 / 1440 / 2160); 0: res_mode decides
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (FSR 3.1 with its anti-aliasing,
                          // else upscaler_pick: settings_apply_levels)
-    int upscaler_pick;   // UPSCALE_BILINEAR / UPSCALE_FSR1 (default): with any anti-aliasing but FSR 3.1 (F12 menu)
+    int upscaler_pick;   // (older files' upscaler choice: read, no longer used - bilinear unless FSR 3.1)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window
     float volume;        // master volume, 1 = 100%
     float brightness;    // colour of the game image (F12 menu, runtime/ui/menu.mm; post pass in runtime/nvn/vulkan/exec.c):
@@ -45,7 +49,7 @@ typedef struct {
     float taa_sharpness;  // TAA: RCAS sharpening at the present, 0..1 (default 0.5)
     float fsr3_sharpness; // FSR 3.1: its RCAS sharpening (AMD's robust CAS), 0..1 (default 0.5; graphics page, under its mode)
     int fsr3_preset;      // FSR3_*: with the FSR 3.1 upscaler, the render resolution (default FSR3_QUALITY)
-    int frame_gen;        // frame generation: 0 off, 2 / 3 / 4 images per world frame (exec.c frame interpolation, any GPU)
+    int frame_gen;        // frame generation: 0 off, FG_AUTO, 2 / 3 / 4 images per world frame (exec.c frame interpolation, any GPU)
     bool blur_quality;    // the game's downsample / blur / depth-of-field composite read better (runtime/nvn/vulkan/exec.c fx_patch_fs)
     bool ui2x;            // the interface textures at 2x when cache/ui2x.pak was made (start screen; runtime/ui2x.c)
     int shadow_filter;    // SHADOW_*: how the shadow map is filtered (F12 menu; textures.c vk_sampler, translate.c shpcf)
