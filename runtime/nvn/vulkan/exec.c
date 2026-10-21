@@ -32,7 +32,7 @@ static uint64_t stat_upload_bytes;
 // LARECOMP_VK_PROF=1: render-thread time per category in the fps log (exec = whole command lists, draw = draw(),
 // sets = descriptor sets incl. cbuf copies, vtx = index scan + vertex copies, submit = vkQueueSubmit2)
 static int prof = -1;
-static uint64_t prof_exec, prof_draw, prof_sets, prof_vtx, prof_submit, prof_pre, prof_key, prof_dyn, prof_tex, prof_up, prof_gpu;
+static uint64_t prof_exec, prof_draw, prof_sets, prof_vtx, prof_submit, prof_pre, prof_key, prof_dyn, prof_tex, prof_up, prof_gpu, prof_ipc;
 static VkQueryPool prof_qp;
 static uint64_t cum_exec, cum_wait, cum_draws, cum_submits;  // (profiling) never reset: hitch log
 static uint32_t prof_end_line[4096];  // passes ended, by the exec.c line that ended them (0: submit / present)
@@ -152,6 +152,24 @@ void vk_full_barrier(VkCommandBuffer cb) {
                            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
     vkCmdPipelineBarrier2(cb, &di);
+}
+// A barrier from (src stages, their accesses) to (dst stages, theirs): what our own passes need, where the full one made
+// the GPU drain everything before each of them
+void vk_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 ss, VkAccessFlags2 sa, VkPipelineStageFlags2 ds, VkAccessFlags2 da) {
+    VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = ss, .srcAccessMask = sa,
+                           .dstStageMask = ds, .dstAccessMask = da};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
+    vkCmdPipelineBarrier2(cb, &di);
+}
+// Before one of our full-screen passes (post_pass_view): anything written before - a pass, a copy, a dispatch - read by
+// its fragment shader or under its colour attachment, and anything read before written by it. What comes after one of
+// them and is not another (the game's passes, copies, dispatches, FSR 3.1) has a full barrier of its own first.
+#define POST_DST_STAGES (VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | \
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT)
+#define POST_DST_ACCESS (VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | \
+                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
+static void vk_post_barrier(VkCommandBuffer cb) {
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT, POST_DST_STAGES, POST_DST_ACCESS);
 }
 
 static void ring_retire(void);
@@ -403,7 +421,8 @@ static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32
 // so the GPU fetches vertices from VRAM instead of reading the game's memory over PCIe once per vertex invocation (an
 // instanced draw re-read its per-instance streams for every vertex: ~0.8 ms for 71 thousand invocations, docs/PESQUISA-GPU.md).
 #define CHUNK_SIZE (64ull << 20)
-typedef struct { VkBuffer buf, dev; VmaAllocation mem, dmem; uint8_t *ptr; uint64_t size, used, seq, flushed; } Chunk;
+// (epoch: how many times the chunk was taken again - a span kept from before (vtx_memo) is valid while it is the same)
+typedef struct { VkBuffer buf, dev; VmaAllocation mem, dmem; uint8_t *ptr; uint64_t size, used, seq, flushed; uint32_t epoch; } Chunk;
 typedef struct { Chunk *c; int n, active; bool gpu; } Pool;
 static Pool pools[2] = {{.active = -1}, {.active = -1, .gpu = true}};
 
@@ -478,6 +497,7 @@ static VkSpan transient_from(Pool *pl, uint64_t size, uint64_t align) {
     if (pick < 0) pick = new_chunk(pl, size > CHUNK_SIZE ? size : CHUNK_SIZE);
     pl->active = pick;
     Chunk *c = &pl->c[pick];
+    c->epoch++;
     c->used = size;
     c->flushed = 0;
     c->seq = pending;
@@ -486,6 +506,26 @@ static VkSpan transient_from(Pool *pl, uint64_t size, uint64_t align) {
 }
 
 VkSpan vk_transient(uint64_t size, uint64_t align) { return transient_from(&pools[0], size, align); }
+// The ring chunk a buffer is (pool * 4096 + index; -1: not the ring's - the game's heap imported, valid as long as it is),
+// and its epoch now
+static int span_chunk(VkBuffer b, uint32_t *epoch) {
+    for (int p = 0; p < 2; p++)
+        for (int i = 0; i < pools[p].n; i++) {
+            Chunk *c = &pools[p].c[i];
+            if (c->buf == b || (c->dev && c->dev == b)) { *epoch = c->epoch; return p * 4096 + i; }
+        }
+    *epoch = 0;
+    return -1;
+}
+// A span kept from earlier in the frame used again: still the chunk's (epoch), and kept from being taken again until this
+// submission completes
+static bool span_still(int ck, uint32_t epoch) {
+    if (ck < 0) return true;
+    Chunk *c = &pools[ck / 4096].c[ck % 4096];
+    if (c->epoch != epoch) return false;
+    c->seq = vk_pending_seq();
+    return true;
+}
 // Vertex / index data of a draw: in VRAM (valid once the submission's first copy has run), or as vk_transient where that is off.
 static VkSpan transient_gpu(uint64_t size, uint64_t align) { return transient_from(&pools[ring_gpu_enabled() ? 1 : 0], size, align); }
 
@@ -682,6 +722,7 @@ static struct {
 uint64_t renderer_present_count(void);
 static int ip_on = -1;
 static bool ip_replaying;     // running a recorded frame again for the in-between image
+static uint32_t ip_ord, ip_draw_ord;  // draws so far in this frame / replay, and this draw's place among them (vtx_memo)
 static uint64_t ip_stats_tagged, ip_stats_untagged;  // draws with / without a game object (CMD_OBJECT)
 static uint64_t ip_draw_sig;  // the current draw's identity (draw_)
 static long ip_sig_dbg;  // (LARECOMP_INTERP_SIG_LOG)
@@ -822,9 +863,9 @@ const char *renderer_stats(void) {
         prof_up = prof_up_ns;
         prof_up_ns = 0;
         size_t n = strlen(stats_text);
-        snprintf(stats_text + n, sizeof stats_text - n, " | gpu %.0f cpu exec %.0f draw %.0f (pre %.0f key %.0f dyn %.0f sets %.0f tex %.0f (upload %.0f) vtx %.0f) submit %.0f ms",
+        snprintf(stats_text + n, sizeof stats_text - n, " | gpu %.0f cpu exec %.0f draw %.0f (pre %.0f key %.0f dyn %.0f sets %.0f tex %.0f (upload %.0f) vtx %.0f) submit %.0f ms ipcbuf %.0f",
                  prof_gpu / 1e6, prof_exec / 1e6, prof_draw / 1e6, prof_pre / 1e6, prof_key / 1e6, prof_dyn / 1e6, prof_sets / 1e6,
-                 prof_tex / 1e6, prof_up / 1e6, prof_vtx / 1e6, prof_submit / 1e6);
+                 prof_tex / 1e6, prof_up / 1e6, prof_vtx / 1e6, prof_submit / 1e6, prof_ipc / 1e6);
         extern uint64_t prof_tex_checks, prof_tex_samples, prof_tex_full, prof_tex_full_bytes, prof_tex_dyn;
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | tex checks %llu samples %llu full %llu (%.1f MB, dynamic %llu)",
@@ -839,7 +880,7 @@ const char *renderer_stats(void) {
         snprintf(stats_text + n, sizeof stats_text - n, " | views created %llu", (unsigned long long)prof_views_created);
         prof_views_created = 0;
         prof_tex_checks = prof_tex_samples = prof_tex_full = prof_tex_full_bytes = prof_tex_dyn = 0;
-        prof_exec = prof_draw = prof_sets = prof_vtx = prof_submit = prof_pre = prof_key = prof_dyn = prof_tex = prof_up = prof_gpu = 0;
+        prof_exec = prof_draw = prof_sets = prof_vtx = prof_submit = prof_pre = prof_key = prof_dyn = prof_tex = prof_up = prof_gpu = prof_ipc = 0;
     }
     stat_draws = stat_skipped = stat_passes = stat_dispatches = stat_flushes = stat_wait_ns = 0;
     return stats_text;
@@ -2429,7 +2470,9 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     if (size < 16) size = 16;
     // frame interpolation: recorded now, or (in the replay) the blended copy this draw takes - also what its motion
     // vectors are taken from there
+    uint64_t prof_ti_ = prof ? SDL_GetTicksNS() : 0;
     const void *ipd = ip_enabled() ? ip_cbuf(stage, k, r.addr, (uint32_t)size) : NULL;
+    if (prof) prof_ipc += SDL_GetTicksNS() - prof_ti_;
     if (mvo_draw && stage == 0 && !mvo_lookup && size <= r.size)
         mvo_record(k, ipd ? ipd : (const void *)(uintptr_t)r.addr, (uint32_t)size);  // (motion vectors)
     bool skinned_vs = stage == 0 && ((si->attr_mask >> 11) & 1);  // (Let's Go: a11 = bone indices)
@@ -3140,10 +3183,42 @@ static bool ssao_draw_hook(void) {
     return true;
 }
 
+// The index and vertex buffers frame N's draws were given (its copies of them in the ring, or the game's heap in place),
+// by the draw's place in the frame: the replays run the same command lists, and took the same ranges again - the index
+// scans and the copies (0.8 ms of a replay's 2.9 on the CPU, 30 fps x 3, Pallet Town) - from memory the game may be
+// writing for the next frame by then. A replay's draw binds N's instead, while their ring chunks were not taken again.
+// LARECOMP_INTERP_VTX_MEMO=0 (comparison): the replays copy as before.
+typedef struct { uint32_t gen, used, icount; bool idx; VkBuffer ib; VkDeviceSize ioff; VkIndexType itype;
+                 int ick; uint32_t iep; VkBuffer vb[17]; VkDeviceSize voff[17]; int vck[17]; uint32_t vep[17]; } VtxMemo;
+static VtxMemo *vtx_memo;
+static uint32_t vtx_memo_cap, vtx_memo_gen = 1;
+static uint64_t vtx_memo_hits, vtx_memo_miss;
+static bool vtx_memo_on(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INTERP_VTX_MEMO") ? atoi(getenv("LARECOMP_INTERP_VTX_MEMO")) : 1;
+    return on && ip_enabled() && !ip_vtx_draw;
+}
+static VtxMemo *vtx_memo_at(uint32_t i, bool grow) {
+    if (i >= vtx_memo_cap) {
+        if (!grow) return NULL;
+        uint32_t nc = i < 4096 ? 8192 : i * 2;
+        vtx_memo = realloc(vtx_memo, nc * sizeof *vtx_memo);
+        memset(vtx_memo + vtx_memo_cap, 0, (nc - vtx_memo_cap) * sizeof *vtx_memo);
+        vtx_memo_cap = nc;
+    }
+    return &vtx_memo[i];
+}
+// A vertex stream bound, and (frame N's draws: vm) kept for the replays
+static void vb_bind(VkCommandBuffer cb, int s, VkBuffer b, VkDeviceSize off, VtxMemo *vm) {
+    vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &b, &off);
+    if (vm) vm->vb[s] = b, vm->voff[s] = off, vm->vck[s] = span_chunk(b, &vm->vep[s]);
+}
+
 static void draw_(CmdRec *r, bool indexed) {
     if (prof) prof_tp_ = SDL_GetTicksNS();
     mvo_draw = 0;
     if (!st.program) { SKIP(0); return; }
+    if (ip_enabled()) ip_draw_ord = ip_ord++;  // (the replays run the same lists: the n-th draw of one is frame N's n-th)
     if (ip_enabled()) {  // (frame interpolation: what identifies this draw from one frame to the next)
         // what the draw is (program, vertex buffer, parameters), and which game object it belongs to: the same mesh
         // drawn for two objects (bushes, Pidgeys) is told apart by the object, not by the order the game drew them in
@@ -3502,6 +3577,25 @@ static void draw_(CmdRec *r, bool indexed) {
     bool use_index = indexed || !native;
     const void *scan_src = NULL;  // deferred index scan (direct index buffer)
     uint32_t scan_isz = 0, scan_restart = 0;
+    VtxMemo *vm = vtx_memo_on() ? vtx_memo_at(ip_draw_ord, !ip_replaying) : NULL;
+    bool vm_hit = false;
+    if (vm && ip_replaying) {  // (frame N's own buffers, when still valid: vtx_memo)
+        vm_hit = vm->gen == vtx_memo_gen && vm->used == k.used_streams && vm->idx == use_index && (!vm->idx || span_still(vm->ick, vm->iep));
+        for (int s = 0; s < 17 && vm_hit; s++)
+            if ((k.used_streams >> s) & 1) vm_hit = span_still(vm->vck[s], vm->vep[s]);
+        if (vm_hit) {
+            if (!indexed) first = (uint32_t)r->x[1], base_inst = (uint32_t)r->x[3], inst = (uint32_t)r->x[4] ? (uint32_t)r->x[4] : 1;
+            else base_vertex = (int32_t)r->x[4], base_inst = (uint32_t)r->x[5], inst = (uint32_t)r->x[6] ? (uint32_t)r->x[6] : 1;
+            icount = vm->icount;
+            if (use_index) vkCmdBindIndexBuffer(cb, vm->ib, vm->ioff, vm->itype);
+            for (int s = 0; s < 17; s++)
+                if ((k.used_streams >> s) & 1) vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &vm->vb[s], &vm->voff[s]);
+            vtx_memo_hits++;
+        } else vtx_memo_miss++;
+        vm = NULL;  // (nothing to keep from a replay)
+    }
+    if (vm) vm->gen = 0;  // (frame N's draw: kept below, once all of it is known)
+    if (!vm_hit) {
     if (!indexed) {
         first = (uint32_t)r->x[1]; base_inst = (uint32_t)r->x[3]; inst = (uint32_t)r->x[4] ? (uint32_t)r->x[4] : 1;
         max_index = first + count;
@@ -3547,6 +3641,8 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     if (use_index) vkCmdBindIndexBuffer(cb, ib.buf, ib.off, itype_vk);
+    if (vm) vm->idx = use_index, vm->ib = ib.buf, vm->ioff = ib.off, vm->itype = itype_vk, vm->icount = icount,
+            vm->ick = use_index ? span_chunk(ib.buf, &vm->iep) : -1;
 
     // ---- vertex streams: the range this draw can read, copied once per submission
     for (int s = 0; s < 17; s++) {
@@ -3571,12 +3667,12 @@ static void draw_(CmdRec *r, bool indexed) {
                 if (need > v.size) need = v.size;
                 VkSpan bl;
                 if (ip_vtx_stream(s, v.addr, need, k.stride[s], k.divisor[s] != 0, &bl)) {
-                    vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &bl.buf, &bl.off);
+                    vb_bind(cb, s, bl.buf, bl.off, vm);
                     continue;
                 }
             }
             if (v.addr && v.size && vtx_direct(v.addr, v.size, &dbuf, &doff)) {
-                vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &dbuf, &doff);
+                vb_bind(cb, s, dbuf, doff, vm);
                 continue;
             }
             if (scan_src) {  // copying after all: the index scan bounds the copy
@@ -3599,9 +3695,10 @@ static void draw_(CmdRec *r, bool indexed) {
                         (unsigned long long)v.size, (unsigned long long)stride, k.divisor[s] ? "instance" : "vertex", max_index, base_vertex, base_inst, inst);
             }
         }
-        VkDeviceSize off = sp.off;
-        vkCmdBindVertexBuffers(cb, (uint32_t)s, 1, &sp.buf, &off);
+        vb_bind(cb, s, sp.buf, sp.off, vm);
     }
+    if (vm) vm->used = k.used_streams, vm->gen = vtx_memo_gen;
+    }  // (!vm_hit)
 
     if (prof) prof_vtx += SDL_GetTicksNS() - prof_t2_;
     // ---- draw
@@ -4159,7 +4256,7 @@ static VkImageView smaa_lut(int i) {
 // (any view: pipe made for its format by post_pipeline_ex; load: keep what is there - blending onto it)
 static void post_pass_view(VkCommandBuffer cb, VkPipeline pipe, const VkImageView *srcs, int n, VkImageView dv, uint32_t dw,
                            uint32_t dh, const float *pc, uint32_t pcn, bool clear, bool load) {
-    vk_full_barrier(cb);
+    vk_post_barrier(cb);
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = dv,
                                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                                     .loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_DONT_CARE,
@@ -4810,7 +4907,6 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
             float ps[8] = {1.0f / (float)ow, 1.0f / (float)oh, 1.0f / (float)in->width, 1.0f / (float)in->height, TAA_HISTORY};
             VkImageView si[4] = {raw_view(in), post_view(nh), post_view(mv)};  // (the bytes, as FSR reads them)
             post_pass_view(cb, post_pipeline("side_resolve.frag"), si, 3, post_view(so), ow, oh, ps, 32, false, false);
-            vk_full_barrier(cb);
             v = post_view(so), rb_ = so;
             // ... and sharpened as FSR 3.1 sharpens the real frames (RCAS, the same strength: its stops 2 - 2 x sharpness),
             // or the in-between images were softer than the real ones and the detail pulsed at the frame rate
@@ -4831,7 +4927,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
                 v = post_view(r), rb_ = r;
             }
         } else if (!vk_tex_lo_active() && fsr3_dispatch(cb, &d)) {  // (a reduced image never: below, FSR 1)
-            vk_full_barrier(cb);
+            // (its compute writes: the next post pass's barrier, or the end's, waits for them)
             v = post_view(out), rb_ = out;
             fsr3_engaged = true, fsr3_rw = b->width, fsr3_rh = b->height, fsr3_ow = ow;
         } else {
@@ -4858,7 +4954,7 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
         post_pass(cb, "deband.frag", di, 1, d, pd, false);
         v = post_view(d), rb_ = d;
     }
-    vk_full_barrier(cb);
+    vk_post_barrier(cb);  // (the present's draw samples it; a keep copy waits with a barrier of its own)
     vk_frame_resume();
     if (res) *res = rb_;
     {
@@ -5176,11 +5272,12 @@ void backend_execute(uint64_t handle) {
 // partner in the frame before, chg_known once the replay compared them - ip_cbuf's held values)
 // pkey: its partner's key in the frame before, once a replay paired them (pkey_ok) - the curve's third point (ip_cbuf)
 // (d2: bound by a 2D draw - no depth test: the interface - left out of the per-object cut check, vk_interp_begin)
-typedef struct { uint64_t key; uint32_t off, size; uint64_t obj; uint8_t stage, k; bool chg_known, pkey_ok, d2; uint64_t chg, pkey; } IpEntry;
+// (slot: where it is in the frame's table - cleared by it, not by the whole table: ip_frame_clear)
+typedef struct { uint64_t key; uint32_t off, size; uint64_t obj; uint8_t stage, k; bool chg_known, pkey_ok, d2; uint64_t chg, pkey; uint32_t slot; } IpEntry;
 // A draw of the recorded frame: its identity, occurrence and shape (ip_pair_draw), and its cbufs (entries first ..
 // first + count - 1, recorded one after the other while it binds them)
 // (vfirst / vcount: its vertex streams recorded, IpVtx: ip_vtx_stream)
-typedef struct { uint64_t sig, shape; uint32_t occ, first, count, vfirst, vcount; } IpDraw;
+typedef struct { uint64_t sig, shape; uint32_t occ, first, count, vfirst, vcount, slot; } IpDraw;
 typedef struct { uint32_t off, size, stride; uint8_t s; } IpVtx;
 typedef struct {
     IpEntry *e;
@@ -5219,6 +5316,9 @@ static int ipc;  // ipf[ipc]: the frame being recorded; ipf[IP_PREV]: the one be
 static float ip_t = 0.5f;
 static uint32_t ip_occ[IP_TAB];  // occurrences of each base key in this frame / replay (by slot)
 static uint64_t ip_occ_key[IP_TAB];
+// A slot is in use in this frame / replay when its generation is the current one: a reset is a new generation, not a
+// clear of the 512 KB of keys (it was one per replay and per frame)
+static uint32_t ip_occ_gen[IP_TAB], ip_occ_cur = 1;
 static uint64_t ip_stats[4];  // blended, kept (no match), words kept, frames replayed
 // LARECOMP_INTERP_DIAG=1: what the in-between image is made of (docs/PESQUISA-60FPS.md, "Diagnóstico da interpolação")
 typedef struct { int stage, k; uint32_t size; uint64_t draws, nomatch, tagged, words, changed, blended, jumps, nonfloat; } IpDiag;
@@ -5250,7 +5350,7 @@ static void ip_diag_dump(void) {
 
 static uint64_t ip_mix(uint64_t h, uint64_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); return h * 0x100000001B3ull; }
 
-static void ip_occ_reset(void) { memset(ip_occ_key, 0, sizeof ip_occ_key); }
+static void ip_occ_reset(void) { if (++ip_occ_cur == 0) memset(ip_occ_gen, 0, sizeof ip_occ_gen), ip_occ_cur = 1; }
 
 static uint64_t ip_last_base;  // ip_key's last key without its occurrence, and that occurrence
 static uint32_t ip_last_occ;
@@ -5261,8 +5361,8 @@ static uint32_t ip_last_occ;
 static uint32_t ip_occ_next(uint64_t sig) {
     if (!sig) sig = 1;
     uint32_t s = (uint32_t)(sig ^ (sig >> 29)) & (IP_TAB - 1);
-    while (ip_occ_key[s] && ip_occ_key[s] != sig) s = (s + 1) & (IP_TAB - 1);
-    if (!ip_occ_key[s]) { ip_occ_key[s] = sig; ip_occ[s] = 0; }
+    while (ip_occ_gen[s] == ip_occ_cur && ip_occ_key[s] != sig) s = (s + 1) & (IP_TAB - 1);
+    if (ip_occ_gen[s] != ip_occ_cur) { ip_occ_gen[s] = ip_occ_cur; ip_occ_key[s] = sig; ip_occ[s] = 0; }
     return ip_occ[s]++;
 }
 static uint64_t ip_key(int stage, int k) {
@@ -5284,10 +5384,12 @@ static const IpEntry *ip_find(const IpFrame *f, uint64_t key) {
 }
 
 static void ip_frame_clear(IpFrame *f) {
-    f->n = 0; f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false; f->ndr = 0; f->dr_sorted = false;
+    f->used = 0; f->nlists = 0; f->overflow = false; f->valid = false; f->dr_sorted = false;
     f->nvx = 0; f->vused = 0; f->paired = false;
-    if (f->drtab) memset(f->drtab, 0, IP_TAB * sizeof *f->drtab);
-    if (f->tab) memset(f->tab, 0, IP_TAB * sizeof *f->tab);
+    // (the slots its entries took, not the whole tables: 2 x 256 KB a frame for a few thousand entries)
+    if (f->drtab) for (uint32_t i = 0; i < f->ndr; i++) f->drtab[f->dr[i].slot] = 0;
+    if (f->tab) for (uint32_t i = 0; i < f->n; i++) f->tab[f->e[i].slot] = 0;
+    f->n = 0, f->ndr = 0;
 }
 
 static void ip_record(uint64_t key, const void *data, uint32_t size, int stage, int k) {
@@ -5306,6 +5408,7 @@ static void ip_record(uint64_t key, const void *data, uint32_t size, int stage, 
     f->used += size;
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
     while (f->tab[s]) s = (s + 1) & (IP_TAB - 1);
+    f->e[f->n].slot = s;
     f->tab[s] = ++f->n;
 }
 
@@ -5371,6 +5474,7 @@ static void ip_draw_record(void) {
     uint64_t key = ip_mix(ip_draw_sig, ip_draw_occ);
     uint32_t s = (uint32_t)(key ^ (key >> 31)) & (IP_TAB - 1);
     while (f->drtab[s]) s = (s + 1) & (IP_TAB - 1);
+    f->dr[f->ndr].slot = s;
     f->drtab[s] = ++f->ndr;
 }
 static const IpDraw *ip_draw_find(const IpFrame *f, uint64_t sig, uint32_t occ) {
@@ -5624,6 +5728,75 @@ static bool ip_vtx_stream(int s, uint64_t addr, uint64_t need, uint32_t stride, 
     return true;
 }
 
+// The blend of each cbuf, decided once a present (the point of "record once, run k - 1 times"): what ip_cbuf_blend
+// decides word by word - kept at N, switched half-way (held values), along the line or the curve through N-2 - does not
+// depend on t, only its result does. The present's first in-between image decides and keeps it (kinds and the
+// polynomial's coefficients: v(t) = c0 + t (c1 + t c2)), the others only evaluate it - with 3 or 4 images a present the
+// blend's work was most of the replays' constant buffer time (0.8 of their 1.1 ms on the CPU, 30 fps x 3, Pallet Town).
+// Per entry of the recorded frame (its index): 1 none (bound as recorded), 2 frame N's own, 3 frame N's with the words
+// of `cnt` sparse entries from off blended (most of a buffer stays N's: copied whole, then those words written).
+typedef struct { uint32_t gen, kind, cnt; uint64_t off; } IpPlan;
+typedef struct { uint32_t i, kind; float c[3]; } IpPlanWord;  // kind 1: the polynomial; 2: a switch at t = 0.5 (c0 / c1: the bits)
+static IpPlan *ip_plan;
+static uint32_t ip_plan_cap, ip_plan_cur = 1;
+static IpPlanWord *ip_pw;  // the present's blended words
+static uint64_t ip_pwn, ip_pwcap;
+static uint8_t *ip_pk;  // (the entry being decided, per word: 0 frame N's, else its kind)
+static float *ip_pc;    // (... and c0, c1, c2)
+static bool ip_plan_on;  // (this present has more than one in-between image: vk_interp_begin)
+static bool ip_plan_verify;
+static uint8_t *ip_cap_k;  // (the entry being decided: its words' kinds and coefficients, ip_cbuf_blend fills them)
+static float *ip_cap_c;
+static bool ip_plan_has(uint32_t ni) { return ip_plan_on && ni < ip_plan_cap && ip_plan[ni].gen == ip_plan_cur; }
+static const void *ip_plan_eval(uint32_t ni, const IpEntry *n) {
+    const IpPlan *pl = &ip_plan[ni];
+    const uint8_t *nd = ipf[ipc].data + n->off;
+    if (pl->kind == 1) return NULL;
+    if (pl->kind == 2) return nd;
+    static uint32_t out[0x10000 / 4];
+    memcpy(out, nd, n->size);
+    float t = ip_t;
+    for (const IpPlanWord *w = ip_pw + pl->off, *e = w + pl->cnt; w < e; w++) {
+        if (w->kind == 1) { float v = w->c[0] + t * (w->c[1] + t * w->c[2]); memcpy(&out[w->i], &v, 4); }
+        else memcpy(&out[w->i], t < 0.5f ? &w->c[0] : &w->c[1], 4);
+    }
+    return out;
+}
+static bool ip_plan_capture_begin(const IpEntry *n) {
+    if (!ip_plan_on) return false;
+    const IpFrame *f = &ipf[ipc];
+    if (ip_plan_cap < f->n) {
+        uint32_t nc = f->n * 2;
+        ip_plan = realloc(ip_plan, nc * sizeof *ip_plan);
+        memset(ip_plan + ip_plan_cap, 0, (nc - ip_plan_cap) * sizeof *ip_plan);
+        ip_plan_cap = nc;
+    }
+    if (!ip_pk) ip_pk = malloc(0x10000 / 4), ip_pc = malloc(0x10000 / 4 * 3 * sizeof *ip_pc);
+    ip_cap_k = ip_pk;
+    ip_cap_c = ip_pc;
+    memset(ip_cap_k, 0, n->size / 4);  // (its words only)
+    return true;
+}
+static const void *ip_plan_capture_end(uint32_t ni, const IpEntry *n, const void *r) {
+    ip_cap_k = NULL, ip_cap_c = NULL;
+    const uint8_t *nd = ipf[ipc].data + n->off;
+    IpPlan *pl = &ip_plan[ni];
+    pl->gen = ip_plan_cur, pl->kind = !r ? 1 : r == nd ? 2 : 3, pl->off = ip_pwn, pl->cnt = 0;
+    if (pl->kind != 3) return r;
+    uint32_t nw = n->size / 4;
+    if (ip_pwn + nw > ip_pwcap) ip_pwcap = (ip_pwn + nw) * 2, ip_pw = realloc(ip_pw, ip_pwcap * sizeof *ip_pw);
+    for (uint32_t i = 0; i < nw; i++)
+        if (ip_pk[i]) {
+            IpPlanWord *w = &ip_pw[ip_pwn + pl->cnt++];
+            w->i = i, w->kind = ip_pk[i];
+            memcpy(w->c, &ip_pc[i * 3], sizeof w->c);
+        }
+    ip_pwn += pl->cnt;
+    if (!pl->cnt) { pl->kind = 2; return nd; }  // (nothing blended: frame N's words as they are)
+    return ip_plan_eval(ni, n);  // (this image too: every image of the present by the same arithmetic)
+}
+
+static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry *n);
 static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     if (stage > 1) return NULL;
     uint64_t key = ip_key(stage, k);
@@ -5641,6 +5814,38 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
     }
     if (!ip_replaying) { ip_record(key, (const void *)(uintptr_t)addr, size, stage, k); return NULL; }
     const IpEntry *n = ip_find(&ipf[ipc], key);
+    if (!n) return ip_cbuf_blend(stage, k, size, n);
+    uint32_t ni = (uint32_t)(n - ipf[ipc].e);
+    if (ip_plan_has(ni)) {  // (decided at the present's first in-between image)
+        const void *pe = ip_plan_eval(ni, n);
+        if (ip_plan_verify) {  // (LARECOMP_INTERP_PLAN=2, validation: the blend done again, compared)
+            static uint32_t keep[0x10000 / 4];
+            if (pe && pe != ipf[ipc].data + n->off) memcpy(keep, pe, n->size), pe = keep;
+            const void *full = ip_cbuf_blend(stage, k, size, n);
+            static uint64_t nchk, ndiff, nkind;
+            static float worst;
+            nchk++;
+            if ((full == NULL) != (pe == NULL)) nkind++;
+            else if (full && pe) {
+                const float *x = full, *y = pe;
+                for (uint32_t i = 0; i < n->size / 4; i++)
+                    if (memcmp(&x[i], &y[i], 4)) {
+                        ndiff++;
+                        float d = isfinite(x[i]) && isfinite(y[i]) ? fabsf(x[i] - y[i]) / fmaxf(fabsf(x[i]), 1.0f) : INFINITY;
+                        if (d > worst) worst = d;
+                    }
+            }
+            if (nchk % 20000 == 0 || nchk == 1000)
+                LOG("[interp-plan] %llu cbufs checked: %llu words differ (worst relative %g), %llu kept / blended mismatches\n",
+                    (unsigned long long)nchk, (unsigned long long)ndiff, (double)worst, (unsigned long long)nkind);
+        }
+        return pe;
+    }
+    bool cap = ip_plan_capture_begin(n);
+    const void *r = ip_cbuf_blend(stage, k, size, n);
+    return cap ? ip_plan_capture_end(ni, n, r) : r;
+}
+static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry *n) {
     const IpEntry *o;
     if (ip_part_set) o = ip_find(&ipf[IP_PREV], ip_mix(ip_mix(ip_mix(ip_part_sig, (uint64_t)stage), (uint64_t)k), ip_part_occ));
     else {
@@ -5781,7 +5986,10 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
         // the in-between images sampled half-way across the atlas, a mix of two frames or a neighbour's cell (flicker).
         // It switches half-way instead. Motion changes every frame and is blended.
         if (!bad && !jump && changed && !held_off && g < 256 && o->chg_known && !(o->chg & (1ull << (g / 4)))) {
-            for (uint32_t i = g; i < g + m; i++) buf[i] = ip_t < 0.5f ? a[i] : b[i];
+            for (uint32_t i = g; i < g + m; i++) {
+                buf[i] = ip_t < 0.5f ? a[i] : b[i];
+                if (ip_cap_k) ip_cap_k[i] = 2, memcpy(&ip_cap_c[i * 3], &a[i], 4), memcpy(&ip_cap_c[i * 3 + 1], &b[i], 4);
+            }
             ip_stats_held += changed;
             continue;
         }
@@ -5810,7 +6018,12 @@ static const void *ip_cbuf(int stage, int k, uint64_t addr, uint32_t size) {
                     float fc;
                     memcpy(&fc, &c3[i], 4);
                     v = ip_curve3(fc, fa, fb, ip_t);
-                } else v = fa + (fb - fa) * ip_t;
+                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * 3] = fa, ip_cap_c[i * 3 + 1] = (fb - fc) * 0.5f,
+                                  ip_cap_c[i * 3 + 2] = (fb - 2.0f * fa + fc) * 0.5f;
+                } else {
+                    v = fa + (fb - fa) * ip_t;
+                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * 3] = fa, ip_cap_c[i * 3 + 1] = fb - fa, ip_cap_c[i * 3 + 2] = 0;
+                }
                 memcpy(&buf[i], &v, 4);
             }
             if (curve) ip_stats_curved += changed;
@@ -5881,8 +6094,11 @@ static void ip_note_list(uint64_t handle) {
 // SMAA, the colour pass), the result - made right away, while the scene's depth, motion vectors, jitter and interface
 // mask are this image's. Slots 0 .. 7: the in-between images; IP_KEEP_N: frame N's own. Two sets, one per present
 // in turn: a present's images wait for their time (device.c) while the next present's are rendered.
+// An in-between image drawn into a window image right after it is made (device.c, the present queue: the default) is
+// not copied: its processed image is drawn from where post_process_ex left it (direct), before the next replay writes
+// there in the command buffer's order. At 4K a copy was ~66 MB of traffic and two full barriers an image.
 #define IP_KEEP_N 8
-typedef struct { TexBackend raw, post; bool post_ok, raw_ok; double ow, oh; } IpKeep;
+typedef struct { TexBackend raw, post; TexBackend *direct; bool post_ok, raw_ok; double ow, oh; } IpKeep;
 static IpKeep ip_keep_sets[2][IP_KEEP_N + 1], *ip_keep = ip_keep_sets[0];
 static TexBackend *hold_copy_into(TexBackend *d, TexBackend *src);
 static VkImageView ip_post_view(TexBackend *b, double ow, double oh) {
@@ -5891,15 +6107,18 @@ static VkImageView ip_post_view(TexBackend *b, double ow, double oh) {
         if (b != &k->raw) continue;
         if (!k->post_ok) return VK_NULL_HANDLE;
         k->post_ok = false;
+        TexBackend *d = k->direct;
+        k->direct = NULL;
         if (fabs(ow - k->ow) > 0.5 || fabs(oh - k->oh) > 0.5) return VK_NULL_HANDLE;  // (the window changed size)
-        return post_view(&k->post);
+        return post_view(d ? d : &k->post);
     }
     return VK_NULL_HANDLE;
 }
 static TexBackend *ip_lo_resolve(TexBackend *lo);
-static TexBackend *ip_keep_image(TexBackend *b, int slot) {
+static TexBackend *ip_keep_image(TexBackend *b, int slot, bool now) {
     IpKeep *k = &ip_keep[slot];
     k->post_ok = k->raw_ok = false;
+    k->direct = NULL;
     TexBackend *res = NULL, *in = b;
     // (a reduced in-between image without FSR 3.1: back to N's size against N's image first, then processed as N was)
     if (slot != IP_KEEP_N && vk_tex_lo_active() && !fsr3_on()) in = ip_lo_resolve(b);
@@ -5909,7 +6128,8 @@ static TexBackend *ip_keep_image(TexBackend *b, int slot) {
         ip_side_post = false;
     } else if (in != b) res = in;
     if (res && res != b) {  // (the processed image is what is shown: the raw one is only its handle, not copied)
-        hold_copy_into(&k->post, res);
+        if (now && slot != IP_KEEP_N) k->direct = res;  // (drawn before anything writes it again: no copy)
+        else hold_copy_into(&k->post, res);
         k->post_ok = true, k->ow = post_last_ow, k->oh = post_last_oh;
         // (N's own image, whole, when the reduced in-between images are resolved against it: ip_lo_resolve)
         if (slot == IP_KEEP_N && ip_lo_factor() < 0.99f && !fsr3_on()) hold_copy_into(&k->raw, b), k->raw_ok = true;
@@ -5956,13 +6176,11 @@ static TexBackend *ip_lo_resolve(TexBackend *lo) {
     float ps[8] = {1.0f / (float)out->width, 1.0f / (float)out->height, 1.0f / (float)lo->width, 1.0f / (float)lo->height, hist};
     VkImageView si[4] = {raw_view(lo), raw_view(&n->raw), mv ? post_view(mv) : vk_dummy_view(TEXTYPE_2D)};
     post_pass_view(cb, post_pipeline("side_resolve.frag"), si, 3, post_view(out), out->width, out->height, ps, 32, false, false);
-    vk_full_barrier(cb);
-    if (stops >= 0) {
+    if (stops >= 0) {  // (the post passes after it wait with their own barriers; a keep copy with its own)
         TexBackend *r = post_image(31, out->width, out->height);
         float pr[8] = {exp2f(-stops), 0, 0, 0, (float)out->width, (float)out->height};
         VkImageView ri_[3] = {post_view(out)};
         post_pass_view(cb, post_pipeline("rcas.frag"), ri_, 1, post_view(r), out->width, out->height, pr, 32, false, false);
-        vk_full_barrier(cb);
         out = r;
     }
     out->sx = n->raw.sx, out->sy = n->raw.sy, out->scalable = n->raw.scalable;
@@ -5973,9 +6191,10 @@ static TexBackend *ip_n_post(double ow, double oh) {
     IpKeep *k = &ip_keep[IP_KEEP_N];
     return k->post_ok && fabs(ow - k->ow) < 0.5 && fabs(oh - k->oh) < 0.5 ? &k->post : NULL;
 }
-// The presented texture b after an in-between image was rendered into it: kept in slot `slot` (0 .. 7) to be shown
-TexBackend *vk_interp_keep(TexBackend *b, int slot) {
-    TexBackend *r = ip_keep_image(vk_tex_lo(b), slot < 0 ? 0 : slot >= IP_KEEP_N ? IP_KEEP_N - 1 : slot);
+// The presented texture b after an in-between image was rendered into it: kept in slot `slot` (0 .. 7) to be shown -
+// now (drawn into the window before the next replay: no copy) or later
+TexBackend *vk_interp_keep(TexBackend *b, int slot, bool now) {
+    TexBackend *r = ip_keep_image(vk_tex_lo(b), slot < 0 ? 0 : slot >= IP_KEEP_N ? IP_KEEP_N - 1 : slot, now);
     vk_tex_lo_end();  // (a reduced image: vk_interp_replay began it)
     return r;
 }
@@ -6000,11 +6219,13 @@ static TexBackend *hold_copy_into(TexBackend *d, TexBackend *src) {
     d->sx = src->sx; d->sy = src->sy; d->scalable = src->scalable;
     VkCommandBuffer cb = vk_cmd();
     gp_mark(cb, "ours: keep copy %ux%u", src->width, src->height);
-    vk_full_barrier(cb);
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+               VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
     VkImageCopy rg = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                       .extent = {src->width, src->height, 1}};
     vkCmdCopyImage(cb, src->image, VK_IMAGE_LAYOUT_GENERAL, d->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
-    vk_full_barrier(cb);
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
     return d;
 }
 
@@ -6213,7 +6434,13 @@ bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period) {
     }
     if (ok) {
         vk_end_pass();
-        *hold = ip_keep_image(b, IP_KEEP_N);
+        // (the blends decided at this present's first in-between image serve the others: ip_plan_*)
+        if (!++ip_plan_cur) ip_plan_cur = 1, memset(ip_plan, 0, ip_plan_cap * sizeof *ip_plan);
+        ip_pwn = 0;
+        static int plan_env = -1;  // (LARECOMP_INTERP_PLAN=0: comparison, every image decides its blends again; 2: both, compared)
+        if (plan_env < 0) plan_env = getenv("LARECOMP_INTERP_PLAN") ? atoi(getenv("LARECOMP_INTERP_PLAN")) : 1, LOG("[interp-plan] mode %d\n", plan_env);
+        ip_plan_on = plan_env && ip_k > 2, ip_plan_verify = plan_env == 2;
+        *hold = ip_keep_image(b, IP_KEEP_N, false);
         // Reduced in-between images: only with frame N's full-size image to resolve them against (FSR 3.1's output, or
         // N's own image)
         ip_lo = ip_lo_factor() < 0.99f &&
@@ -6267,6 +6494,7 @@ void vk_interp_replay(float t) {
     st = cur->start;
     st.rt_dirty = true;
     ip_replaying = true;
+    ip_ord = 0;
     ip_occ_reset();
     for (int i = 0; i < cur->nlists; i++) exec_list(cur->lists[i], 0);
     vk_end_pass();
@@ -6283,9 +6511,9 @@ void vk_interp_replay(float t) {
             (unsigned long long)ip_stats_content, (unsigned long long)ip_stats[3]);
     if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu, partner taken %llu\n",
+        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu, partner taken %llu; buffers of frame N reused %llu, copied again %llu\n",
             (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged, (unsigned long long)ip_stats_vtx,
-            (unsigned long long)ip_stats_other_copy, (unsigned long long)ip_stats_taken);
+            (unsigned long long)ip_stats_other_copy, (unsigned long long)ip_stats_taken, (unsigned long long)vtx_memo_hits, (unsigned long long)vtx_memo_miss);
 }
 
 // After the present's images: the next frame records into the other slot, from the state this one ended with
@@ -6294,6 +6522,7 @@ void vk_interp_end(void) {
     ip_began = false;
     ipc = (ipc + 1) % 3;
     ip_frame_clear(&ipf[ipc]);
+    ip_ord = 0, vtx_memo_gen++;  // (the next frame's draws: vtx_memo)
     ipf[ipc].start = st;
     ipf[ipc].destroyed = g_nvn_destroyed;
     ipf[ipc].valid = true;

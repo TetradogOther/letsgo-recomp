@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Frame generation: the in-between images cost ~45 % less CPU** (30 fps x 4, Pallet Town: 3.25 -> 1.77 ms a replay;
+  the draws' CPU time 756 -> 490 ms every 2 s). The replays run frame N's command lists again, and redid what does not
+  change from one image to the next:
+  - Each constant buffer's blend - kept at N, switched half-way, along the line or the curve - is decided at the
+    present's first in-between image and only evaluated at the others' t (`c0 + t (c1 + t c2)` for the words that move;
+    the rest is N's as it is). Checked against the full blend (`LARECOMP_INTERP_PLAN=2`): 1.9 million buffers, the same
+    to 1.8e-7, no buffer kept by one and blended by the other.
+  - A replay's draw binds the index and vertex buffers frame N's same draw had (its place in the frame: the lists are
+    the same) instead of scanning and copying them again - while their ring memory was not taken again (99.9 %). The
+    vertex data is then N's, not what the game may be writing for the next frame meanwhile.
+  - An in-between image drawn into the window right after it is made is no longer copied first (~66 MB of traffic at
+    4K and two full barriers an image); the per-frame tables are cleared by the slots used, not whole (2 x 256 KB a
+    frame, 512 KB a replay).
+  - Our own full-screen passes wait for what they read with a barrier for the fragment stages instead of a full one,
+    and the second barrier after most of them is gone (no difference measured where the CPU sets the pace).
+
 - **Frame generation "Auto" lowers the in-between images' resolution before the multiplier**: when the GPU can't keep
   up, the in-between images are rendered at 75 %, then 50 % of the real frames' size on each axis (half a second late
   each), and only then the multiplier goes down a step (a second late), at full size again - 60 fps at 240 Hz: 4x at

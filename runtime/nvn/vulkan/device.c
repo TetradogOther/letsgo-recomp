@@ -956,7 +956,7 @@ void backend_present(NvnTexture *t) {
     TexBackend *hold = NULL;
     extern bool vk_interp_begin(TexBackend *b, TexBackend **hold, uint64_t period);
     extern void vk_interp_replay(float t);
-    extern TexBackend *vk_interp_keep(TexBackend *b, int slot);
+    extern TexBackend *vk_interp_keep(TexBackend *b, int slot, bool now);
     extern void vk_interp_end(void);
     extern int vk_interp_images(void);
     bool inter = vk_interp_begin(b, &hold, period);
@@ -978,7 +978,7 @@ void backend_present(NvnTexture *t) {
         TexBackend *img = final ? (inter ? hold : b) : NULL;
         if (!final) {  // (rendered into the game's textures, then kept: the next replay writes them again)
             vk_interp_replay((float)(image + 1) / (float)nimg);
-            img = vk_interp_keep(b, image);
+            img = vk_interp_keep(b, image, !one_queue_path);  // (drawn into a window image just below: not copied)
         }
         uint64_t due = inter ? tl + ip_lead + period * (uint64_t)image / (uint64_t)nimg : t0;
         // On the display's refresh grid: a quarter of a refresh after the blank before its time, so it is shown at the next

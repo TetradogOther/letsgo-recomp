@@ -468,13 +468,15 @@ static int g_nlo_swapped, g_cap_lo_swapped;
 bool vk_tex_lo_active(void) { return g_lo_on; }
 TexBackend *vk_tex_lo(TexBackend *b) { return g_lo_on && b && b->lo && b->lo->full == b ? b->lo : b; }
 void vk_full_barrier(VkCommandBuffer cb);
+void vk_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 ss, VkAccessFlags2 sa, VkPipelineStageFlags2 ds, VkAccessFlags2 da);
 static void lo_seed(TexBackend *b, TexBackend *lo) {
     VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
     bool depth = (b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
     if (!depth) need |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
     if (!format_supports(b->format, need) || b->format != lo->format) return;
     VkCommandBuffer cb = vk_cmd();
-    vk_full_barrier(cb);
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+               VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
     for (uint32_t lv = 0; lv < b->levels && lv < lo->levels; lv++) {
         VkImageBlit bl = {.srcSubresource = {b->aspect, lv, 0, b->layers}, .dstSubresource = {lo->aspect, lv, 0, lo->layers},
                           .srcOffsets = {{0, 0, 0}, {(int32_t)level_w(b, lv), (int32_t)level_h(b, lv), 1}},
@@ -482,7 +484,8 @@ static void lo_seed(TexBackend *b, TexBackend *lo) {
         vkCmdBlitImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, lo->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl,
                        depth ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
     }
-    vk_full_barrier(cb);
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
 }
 void vk_tex_lo_begin(float f) {
     if (g_lo_on) return;
