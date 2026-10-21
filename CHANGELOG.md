@@ -18,8 +18,8 @@ the controller layout and the menus in the game's own style.
   and right edges lined up with the title and the tabs), their text on one column; the values in the rows' right half
   on every page; 12 px between rows and 24 between groups, in place of separator lines. The sliders are a slim track
   with the value after it (it was written over the knob), and left / right step them too. On the start screen the
-  toggles (fullscreen, wild battles...), the key bindings and the mods are rows like the rest, and the buttons pills
-  on the same grid.
+  toggles (fullscreen, wild battles...) and the key bindings are rows like the rest, each mod a row with an on / off
+  switch and its arrows at the right end, and the buttons pills on the same grid.
 - **Fixes the start screen opening in full screen** with `fullscreen = 1`: it took its own size, then went back to full
   screen at once (the setting is now applied to the game's window only).
 

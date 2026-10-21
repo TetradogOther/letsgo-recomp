@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_sdl3.h"
 #include "settings_ui.h"
@@ -298,29 +299,45 @@ static void mods_section(SDL_Window *win, int inst) {
     ImGui::PopTextWrapPos();
     ui_heading(T("Mods", "Mods"));
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%s", T("Tick the ones to use (several at once). Where two change the same file, the higher one wins: the arrows move it.",
-                                "Marque os que vão ser usados (vários ao mesmo tempo). Se dois trocam o mesmo arquivo, vale o de cima: as setas mudam a ordem."));
+    ImGui::TextDisabled("%s", T("Turn on the ones to use (several at once). Where two change the same file, the higher one wins: the arrows move it.",
+                                "Ligue os que vão ser usados (vários ao mesmo tempo). Se dois trocam o mesmo arquivo, vale o de cima: as setas mudam a ordem."));
     ImGui::PopTextWrapPos();
+    // each mod a row: its name (cut short with "..." when long: the whole of it in the tip), an on / off switch and the
+    // arrows that move it up / down at the row's right end (bare on the pill; a circle under the mouse)
     int move = -1, dir = 0;
-    ImGui::PushStyleColor(ImGuiCol_Button, 0);  // (the arrows bare on the row's pill; a circle under the mouse)
+    ImGui::PushStyleColor(ImGuiCol_Button, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
     for (int i = 0; i < g_nmods; i++) {
         ImGui::PushID(i);
         ui_pill_row();
+        ImGuiWindow *w = ImGui::GetCurrentWindow();
+        ImDrawList *dl = w->DrawList;
+        float h = ImGui::GetFrameHeight(), sp = ImGui::GetStyle().ItemSpacing.x, gap = sp * 0.5f, sw = h * 1.45f;
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float end = w->WorkRect.Max.x - ui_inset() * 0.6f, ax = end - h * 2 - gap, sx = ax - sp - sw, nmax = sx - sp * 1.5f;
+        ImVec2 ts = ImGui::CalcTextSize(g_mods[i]);
+        float ty = p.y + (h - ts.y) * 0.5f;
+        ImGui::RenderTextEllipsis(dl, ImVec2(p.x, ty), ImVec2(nmax, ty + ts.y), nmax, nmax, g_mods[i], NULL, &ts);
+        // the switch: green with the knob at the right when on
+        ImGui::SetCursorScreenPos(ImVec2(sx, p.y));
+        if (ImGui::InvisibleButton("##on", ImVec2(sw, h))) g_mod_on[i] = !g_mod_on[i];
+        const char *lang = mod_language(g_mods[i]);
+        char tip[320];
+        if (lang) snprintf(tip, sizeof tip, g_pt ? "%s: troca os textos em %s." : "%s: replaces the %s texts.", g_mods[i], lang_name(lang));
+        else snprintf(tip, sizeof tip, "%s", g_mods[i]);
+        ui_tip(tip);
+        float th = h * 0.62f, cy = p.y + h * 0.5f, kr = th * 0.5f - 3 * g_scale, kx = g_mod_on[i] ? sx + sw - th * 0.5f : sx + th * 0.5f;
+        dl->AddRectFilled(ImVec2(sx, cy - th * 0.5f), ImVec2(sx + sw, cy + th * 0.5f),
+                          g_mod_on[i] ? ImGui::GetColorU32(ImGuiCol_PlotHistogram) : ImGui::GetColorU32(IM_COL32(200, 208, 176, 255)), th * 0.5f);
+        dl->AddCircleFilled(ImVec2(kx, cy), kr, ImGui::GetColorU32(IM_COL32_WHITE));
+        ImGui::SetCursorScreenPos(ImVec2(ax, p.y));
         ImGui::BeginDisabled(i == 0);
         if (ImGui::ArrowButton("##up", ImGuiDir_Up)) move = i, dir = -1;
         ImGui::EndDisabled();
-        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.4f);
+        ImGui::SameLine(0, gap);
         ImGui::BeginDisabled(i == g_nmods - 1);
         if (ImGui::ArrowButton("##down", ImGuiDir_Down)) move = i, dir = 1;
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::Checkbox(g_mods[i], &g_mod_on[i]);
-        const char *lang = mod_language(g_mods[i]);
-        if (lang) {
-            ImGui::SameLine();
-            ImGui::TextDisabled(g_pt ? "(troca os textos em %s)" : "(replaces the %s texts)", lang_name(lang));
-        }
         ImGui::PopID();
     }
     ImGui::PopStyleVar();

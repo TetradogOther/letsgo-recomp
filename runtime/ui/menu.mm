@@ -476,7 +476,7 @@ static void cfg_draw(ImGuiIO &io, float scale) {
     {
         const char *names[] = {M("Graphics", "Gráficos", "Графика"), M("Image and sound", "Imagem e som", "Изображение и звук"),
                                M("Advanced", "Avançado", "Дополнительно")};
-        float pad = fh * 0.55f, gap = st.ItemSpacing.x * 0.6f, chip = fh * 0.95f, w[3], total = chip * 2 + gap * 4;
+        float pad = fh * 0.55f, gap = st.ItemSpacing.x, chip = fh * 0.95f, w[3], total = chip * 2 + gap * 4;
         for (int t = 0; t < 3; t++) total += w[t] = ImGui::CalcTextSize(names[t]).x + pad * 2;
         float x = wp.x + ws.x - st.WindowPadding.x - total, y = (t0.y + t1.y) * 0.5f;
         auto shoulder = [&](float cx, const char *k) {  // L / R: a dark rounded chip
