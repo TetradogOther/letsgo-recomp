@@ -14,6 +14,8 @@ the controller layout and the menus in the game's own style.
   "close the game?" question and the name entry take the same look.
 - **F12 menu: A / B follow the controller layout**: with the Xbox layout, A (bottom) confirms and B (right) closes, as
   in the game; it was the Nintendo positions whatever the layout.
+- **Fixes the start screen opening in full screen** with `fullscreen = 1`: it took its own size, then went back to full
+  screen at once (the setting is now applied to the game's window only).
 
 - **Frame generation: grass coming into view no longer shows ahead of the ground** (Route 2, walking down out of the
   gate after going in and out: clumps at the top left not drawn right in the in-between images). A copy of a mesh with

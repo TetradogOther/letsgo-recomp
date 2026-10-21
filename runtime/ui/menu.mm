@@ -267,11 +267,10 @@ void menu_apply_window_requests(void *win) {
         else SDL_StopTextInput(w);
         text_input = want_text;
     }
-    static bool first = true;
-    if (first || g_want_fullscreen_apply.exchange(false)) {
-        first = false;
-        SDL_SetWindowFullscreen(w, g_settings.fullscreen);
-    }
+    // F11 / Alt+Enter only: the setting itself is applied where the window is made (ui_window_init) and handed to the game
+    // (runtime/ui/launcher_lg.mm window_as_game) - applied here on the first call too, the start screen (which calls this
+    // each frame) went back to full screen right after taking its own size
+    if (g_want_fullscreen_apply.exchange(false)) SDL_SetWindowFullscreen(w, g_settings.fullscreen);
 }
 
 // ------------------------------------------------------------------ render thread
