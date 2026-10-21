@@ -83,7 +83,6 @@ static void parse_line(const char *line) {
     else if (!strcmp(key, "gi_debug")) g_settings.gi_debug = atoi(val) != 0;  // (by hand / tests: never saved)
     else if (!strcmp(key, "ui2x")) g_settings.ui2x = atoi(val) != 0;
     else if (!strcmp(key, "blur_quality")) g_settings.blur_quality = atoi(val) != 0;
-    else if (!strcmp(key, "contact_shadows")) g_settings.contact_shadows = atoi(val) != 0;
     else if (!strcmp(key, "shadow_filter"))
         g_settings.shadow_filter = !strcmp(val, "game") ? SHADOW_GAME : !strcmp(val, "bilinear") ? SHADOW_BILINEAR : SHADOW_SMOOTH;
     else if (!strcmp(key, "ssao_debug")) g_settings.ssao_debug = atoi(val) != 0;  // (by hand / tests: never saved)
@@ -152,11 +151,10 @@ void settings_apply_levels(void) {
     g_settings.ssao_level = s, g_settings.gi_level = g;
     static const int ssao_samples[] = {16, 8, 12, 16, 16};
     g_settings.ssao = s != FX_OFF;
-    // Ultra: high plus the contact shadows, lighter than their own setting (8 steps, 75 % of its strength: ~half their
-    // GPU time); with that setting on too, its own (16 steps, full strength)
-    g_settings.contact_on = g_settings.contact_shadows || s == FX_ULTRA;
-    g_settings.contact_steps = g_settings.contact_shadows ? 16 : 8;
-    g_settings.contact_strength = g_settings.contact_shadows ? 0.5f : 0.375f;
+    // Ultra: high plus the contact shadows (8 steps, strength 0.375: ~half the GPU time of 16 steps at 0.5)
+    g_settings.contact_on = s == FX_ULTRA;
+    g_settings.contact_steps = 8;
+    g_settings.contact_strength = 0.375f;
     g_settings.ssao_samples = ssao_samples[s];
     g_settings.ssao_intensity = 2.0f, g_settings.ssao_radius = 100.0f, g_settings.ssao_temporal = true;
     static const int gi_rays[] = {4, 2, 3, 4}, gi_steps[] = {8, 6, 6, 8}, gi_div[] = {2, 3, 2, 2};
@@ -234,7 +232,6 @@ void settings_save(void) {
     fprintf(f, "mv_objects = %d\n", g_settings.mv_objects);
     fprintf(f, "ui2x = %d\n", g_settings.ui2x);
     fprintf(f, "blur_quality = %d\n", g_settings.blur_quality);
-    fprintf(f, "contact_shadows = %d\n", g_settings.contact_shadows);
     fprintf(f, "shadow_filter = %s\n", g_settings.shadow_filter == SHADOW_GAME ? "game" :
                                        g_settings.shadow_filter == SHADOW_BILINEAR ? "bilinear" : "smooth");
     fprintf(f, "reverb = %d\n", g_settings.reverb);

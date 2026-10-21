@@ -138,7 +138,7 @@ void ui_tab_select(int index) { g_tab_want = index; }
 
 // ------------------------------------------------------------------ the graphics page
 static const char *const *graphics_labels(int *n) {
-    static const char *l[9];
+    static const char *l[8];
     l[0] = UI_T("Frame rate limit", "Limite de quadros", "Лимит кадров");
     l[1] = UI_T("Ambient occlusion (SSAO)", "Oclusão de ambiente (SSAO)", "Затенение (SSAO)");
     l[2] = UI_T("Indirect light (GI)", "Luz indireta (GI)", "Непрямой свет (GI)");
@@ -147,8 +147,7 @@ static const char *const *graphics_labels(int *n) {
     l[5] = UI_T("FSR 3.1 mode", "Modo do FSR 3.1", "Режим FSR 3.1");
     l[6] = UI_T("Frame generation", "Geração de quadros", "Генерация кадров");
     l[7] = UI_T("Sharpening (AMD RCAS)", "Nitidez (AMD RCAS)", "Резкость (AMD RCAS)");
-    l[8] = UI_T("Contact shadows", "Sombras de contato", "Контактные тени");
-    *n = 9;
+    *n = 8;
     return l;
 }
 
@@ -185,13 +184,13 @@ void ui_page_graphics(float x, bool known) {
     const char *lv[] = {UI_T("Off", "Desligado", "Выкл."), UI_T("Low", "Baixo", "Низкое"), UI_T("Medium", "Médio", "Среднее"),
                         UI_T("High", "Alto", "Высокое")};
     ui_row(l[1], x);
-    {   // (SSAO only: ultra = high plus light contact shadows, settings_apply_levels)
+    {   // (SSAO only: ultra = high plus the contact shadows, settings_apply_levels)
         const char *lv5[] = {lv[0], lv[1], lv[2], lv[3], "Ultra"};
         ImGui::Combo("##ssao_lv", &g_settings.ssao_level, lv5, 5);
         if (ImGui::IsItemHovered() && g_settings.ssao_level == FX_ULTRA)
-            ImGui::SetTooltip("%s", UI_T("High, plus light contact shadows (8 steps, 75% strength).",
-                                         "Alto, mais sombras de contato leves (8 passos, 75% da intensidade).",
-                                         "Высокое плюс лёгкие контактные тени (8 шагов, 75% силы)."));
+            ImGui::SetTooltip("%s", UI_T("High, plus contact shadows where objects touch the ground (feet, grass, small props).",
+                                         "Alto, mais sombras de contato onde os objetos tocam o chão (pés, grama, objetos pequenos).",
+                                         "Высокое плюс контактные тени там, где предметы касаются земли (ноги, трава, мелкие объекты)."));
     }
     ui_row(l[2], x);
     ImGui::Combo("##gi_lv", &g_settings.gi_level, lv, 4);
@@ -199,20 +198,6 @@ void ui_page_graphics(float x, bool known) {
     const char *sh[] = {UI_T("Game's", "Do jogo", "Как в игре"), UI_T("Bilinear", "Bilinear", "Билинейный"), UI_T("Smooth", "Suave", "Мягкий")};
     ui_row(l[3], x);
     ImGui::Combo("##shadow_filter", &g_settings.shadow_filter, sh, 3);
-    // screen-space contact shadows toward the sun (runtime/nvn/vulkan/exec.c contact_run)
-    {
-        const char *o[] = {UI_T("Off", "Desligado", "Выкл."), UI_T("On", "Ligado", "Вкл.")};
-        int cur = g_settings.contact_shadows ? 1 : 0;
-        ui_row(l[8], x);
-        if (ImGui::Combo("##contact", &cur, o, 2)) g_settings.contact_shadows = cur == 1;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", UI_T("Short shadows where objects touch the ground (feet, grass, small props) that the game's "
-                                         "shadow map is too coarse to show.",
-                                         "Sombras curtas onde os objetos tocam o chão (pés, grama, objetos pequenos) que o mapa de "
-                                         "sombras do jogo é grosseiro demais para mostrar.",
-                                         "Короткие тени там, где предметы касаются земли (ноги, трава, мелкие объекты), которые "
-                                         "карта теней игры слишком груба, чтобы показать."));
-    }
     ImGui::Separator();
     // anti-aliasing: SMAA on the final image (the interface too), TAA on the scene (jittered, motion vectors:
     // runtime/nvn/vulkan/exec.c taa_run) or FSR 3.1 (temporal, the interface masked: exec.c, fsr3.cpp), the last one

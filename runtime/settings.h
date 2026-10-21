@@ -43,10 +43,10 @@ typedef struct {
     float ssao_intensity; // 0..3 (default 2)
     float ssao_radius;    // in the game's world units (~cm): 10..400 (default 100)
     bool ssao_temporal;   // accumulated over frames along the camera motion vectors (exec.c ssao_run)
-    bool contact_shadows; // short rays toward the sun in the depth: small objects' shadows the shadow map misses (exec.c contact_run)
-    bool contact_on;      // (settings_apply_levels: the contact shadows run - their own setting, or SSAO ultra)
-    int contact_steps;    // ... their steps along a ray (16; SSAO ultra alone: 8)
-    float contact_strength;  // ... and how dark (0.5; SSAO ultra alone: 75 % of it)
+    bool contact_on;      // (settings_apply_levels: SSAO ultra) short rays toward the sun in the depth: small objects'
+                          // shadows the shadow map misses (exec.c contact_run)
+    int contact_steps;    // ... their steps along a ray (8)
+    float contact_strength;  // ... and how dark (0.375)
     bool ssao_debug;      // (not saved) the scene shows the occlusion alone
     bool mv_debug;        // (not saved) the scene shows its camera motion vectors (runtime/nvn/vulkan/exec.c scene_hook)
     bool mv_objects;      // per-object motion vectors (characters' own motion) when motion vectors are in use (default on)

@@ -42,13 +42,10 @@
   100 / 75 / 50 %, then 2x at 100 / 75 / 50 %, each step cheaper than the one before (4K: 3.65 / 2.52 / 1.63 ms an
   in-between image, detail within 1 - 3 % of the real frames). Back up as before. Measured at 60 fps, 240 Hz: 4x 100 ->
   75 -> 50 % -> 2x, and up again to 4x at 50 % with room (`[fg] auto: 4x, in-between images at 75 % ...`).
-- **Contact shadows** (graphics page, off by default; `contact_shadows` in `larecomp.ini`): short rays toward the sun
-  in the scene's depth, for the shadows the game's 2048² shadow map is too coarse to show - under the feet, in the
+- **SSAO "Ultra"** (graphics page, after High; `ssao_level = 4`): High plus contact shadows - short rays toward the
+  sun in the scene's depth, for the shadows the game's 2048² shadow map is too coarse to show: under the feet, in the
   grass, under a lamp's cap. The sun is the shadow map's own light (its pass's light matrix, by a vote over its draws).
-  Blurred along the depth like the SSAO, faded out in the distance; 0.9 ms at 4K.
-- **SSAO "Ultra"** (graphics page, after High; `ssao_level = 4`): High plus light contact shadows - 8 steps along their
-  rays and 75 % of their strength (0.54 ms at 4K, against 0.87 for the full ones). With the contact shadows' own
-  setting on too, theirs (16 steps, full strength).
+  8 steps along a ray, blurred along the depth like the SSAO, faded out in the distance; 0.54 ms at 4K.
 - **Sharper textures with TAA and FSR 3.1**: the game's textures in 3D draws take a negative mip bias while a temporal
   resolve brings the detail back - AMD's `log2(render / display) - 1` with FSR 3.1 (native: -1), -0.5 with TAA - not
   its render targets (bloom, the depth pyramid read at explicit levels) nor the interface. Detail +2.5 % at 720p.
