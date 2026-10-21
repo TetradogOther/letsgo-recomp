@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Frame generation: the interface no longer flickers in battles** (and wherever text or boxes sit over a moving
+  scene): with FSR 3.1, or with the in-between images at a reduced size, an in-between image is resolved against frame
+  N's image along the motion vectors of the scene under each pixel - the interface's too, so static text took N's text
+  shifted by the scene's motion and showed doubled in the images between two frames, clean in the real ones (FSR 3.1
+  has the interface mask): a flicker at the game's rate. The real frame's interface mask is now made with frame
+  generation on whatever the anti-aliasing, and where it says interface an in-between image takes N's processed image
+  at the same place - its interface is N's anyway (2D draws keep N's constants). Viridian Forest, a trainer's battle
+  text: in-between images against their frame 13.1 -> 0.27 (the text identical in every image). In the world the mask
+  covers the interface alone (0.4 % of the image in a battle with only the ball counter shown).
+  `LARECOMP_INTERP_UI_KEEP=0` compares.
+- **FSR 3.1: the interface stands still** (with or without frame generation; most visible at 4K): FSR 3.1 rebuilt the
+  interface as part of the jittered scene - it is drawn into the same image, without the jitter - and each frame's
+  text and boxes landed where that frame's jitter put them, a pixel off from the frame before (at 4K Quality, 1.5x),
+  shaking at the game's rate under in-between images that keep frame N's. The interface is now composited after the
+  upscale: where the mask says interface, the image FSR 3.1 was given, Catmull-Rom from the render size. 4K, battle
+  menu: the HP boxes from one real frame to the next 5.8 -> 0.10 (the opponent's 4.4 -> 0.02), as sharp as before
+  (detail 8.8 -> 9.3). `LARECOMP_FSR3_UI_COMPOSITE=0` compares.
+
 - **Frame generation: the in-between images cost ~45 % less CPU** (30 fps x 4, Pallet Town: 3.25 -> 1.77 ms a replay;
   the draws' CPU time 756 -> 490 ms every 2 s). The replays run frame N's command lists again, and redid what does not
   change from one image to the next:

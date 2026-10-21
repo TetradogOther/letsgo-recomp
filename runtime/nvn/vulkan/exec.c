@@ -3327,7 +3327,8 @@ static void draw_(CmdRec *r, bool indexed) {
         }
     }
     resolve_feedback(pr);
-    if (g_settings.upscaler == UPSCALE_FSR3 && fsr3_on()) ui_snapshot_check(pr);  // (FSR 3: the interface mask)
+    // (FSR 3: the interface mask; frame generation: the real frames' mask, for their in-between images - ip_ui_keep)
+    if (((g_settings.upscaler == UPSCALE_FSR3 && fsr3_on()) || (g_settings.frame_gen && ip_enabled())) && !ip_replaying) ui_snapshot_check(pr);
     snap_reason = "draw-depthwrite";
     if (st.rt.depth && st.ds[0] && st.ds[1]) snapshots_invalidate(st.rt.depth);
     snap_reason = "draw-colorwrite";
@@ -4193,7 +4194,8 @@ static VkPipeline post_pipeline(const char *fs) { return post_pipeline_ex(fs, VK
 // before the interface, 26: FSR 3's interface mask, 27: an in-between image's TAA result (its history left as it was),
 // 28, 29: N's SSAO / GI moved to an in-between image, 30: an in-between image resolved against N's FSR 3.1 output,
 // 31: that image sharpened, 32: debanding (the last post pass), 33, 34: contact shadows (mask, blur: contact_run), 35: their
-// debug view. The in-between images at a reduced size (vk_tex_lo_begin) have a set of their own (48 on):
+// debug view, 36: an in-between image with frame N's interface (ip_ui_keep), 37: FSR 3.1's output with the interface
+// composited after it. The in-between images at a reduced size (vk_tex_lo_begin) have a set of their own (48 on):
 // sized for them, they were made again at every switch between a real frame and an in-between image, and the real
 // frames' histories (SSAO, GI, TAA) went with them.
 static TexBackend *post_image_fmt(int i, uint32_t w, uint32_t h, VkFormat fmt) {
@@ -4775,6 +4777,49 @@ static void ui_snapshot_check(Prog *pr) {
     st.rt_dirty = true;  // (the pass begins again for this draw)
 }
 
+// The interface mask of image b (post image 26: where it differs from the copy made before the frame's first interface
+// draw, ui_snapshot_check), or NULL. FSR 3.1 takes it; frame generation keeps the real frame's for its in-between images
+// (ip_ui_mask): their interface is frame N's, drawn with N's constants.
+static TexBackend *ip_ui_mask;
+static uint64_t ip_ui_mask_real;  // (the present it was made at)
+static TexBackend *ui_mask_build(VkCommandBuffer cb, TexBackend *b, uint64_t fr) {
+    // the image the copy was made of, as it is now: the presented one, or the last pass's input (before its colour
+    // grading, like the copy)
+    TexBackend *now = ui_snap_of == b ? b : ui_snap_of == ui_final_src && ui_final_frame == fr ? ui_final_src : NULL;
+    if (ui_snap_frame != fr || !ui_snap || !now || ui_snap->width != b->width || ui_snap->height != b->height) return NULL;
+    TexBackend *m = post_image(26, b->width, b->height);
+    float pz[8] = {0};
+    VkImageView mi[4] = {raw_view(now), post_view(ui_snap)};
+    post_pass_view(cb, post_pipeline("ui_mask.frag"), mi, 2, post_view(m), b->width, b->height, pz, 32, false, false);
+    vk_full_barrier(cb);
+    static long dump_at = -2;  // (LARECOMP_FSR3_MASK_DUMP=<frame>: the mask -> build/frames/uimask_<frame>.png)
+    if (dump_at == -2) dump_at = getenv("LARECOMP_FSR3_MASK_DUMP") ? atol(getenv("LARECOMP_FSR3_MASK_DUMP")) : -1;
+    if (dump_at >= 0 && ((long)fr == dump_at || (long)renderer_present_count() == dump_at)) {  // (with frame generation: the present)
+        char path[64];
+        snprintf(path, sizeof path, "build/frames/uimask_%05ld.png", dump_at);
+        renderer_save_texture_tex(m, path);
+    }
+    if (!ip_side_post) ip_ui_mask = m, ip_ui_mask_real = renderer_present_count();
+    return m;
+}
+// An in-between image's interface, frame N's: resolved against N's image along the motion vectors of the scene under it
+// (side_resolve.frag), static text and boxes took N's shifted by the scene's motion - the battle's text doubled in the
+// images between two frames, clean in the real ones (FSR 3.1 has the mask), a flicker at the game's rate. Where N's
+// mask says interface, the image takes N's processed image at the same place instead: the same interface, as sharp
+// (after the RCAS that follows the resolve: not sharpened twice). in: the resolved image; nimg: N's, the same size.
+static TexBackend *ip_ui_keep(VkCommandBuffer cb, TexBackend *in, TexBackend *nimg, bool nraw) {
+    if (!ip_ui_mask || ip_ui_mask_real != renderer_present_count() || !nimg) return in;
+    static int off = -1;  // (LARECOMP_INTERP_UI_KEEP=0: comparison, the interface resolved like the scene)
+    if (off < 0) off = getenv("LARECOMP_INTERP_UI_KEEP") && !atoi(getenv("LARECOMP_INTERP_UI_KEEP"));
+    if (off) return in;
+    TexBackend *out = post_image(36, in->width, in->height);
+    float pc[8] = {1.0f / (float)in->width, 1.0f / (float)in->height};
+    VkImageView si[4] = {post_view(in), nraw ? raw_view(nimg) : post_view(nimg), post_view(ip_ui_mask)};
+    post_pass_view(cb, post_pipeline("ui_keep.frag"), si, 3, post_view(out), in->width, in->height, pc, 32, false, false);
+    out->sx = in->sx, out->sy = in->sy, out->scalable = in->scalable;
+    return out;
+}
+
 // The view the present samples: the game image, or its anti-aliased / upscaled version. ow x oh: the whole image's
 // size in the window (its crop is drawn into the viewport).
 static double post_last_ow, post_last_oh;  // the output size post_process was last asked for
@@ -4829,6 +4874,9 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
     extern void vk_frame_suspend(void);
     extern void vk_frame_resume(void);
     vk_frame_suspend();
+    // (frame generation without FSR 3.1: the real frame's interface mask, for its reduced in-between images' resolve -
+    // ip_lo_resolve, ip_ui_keep)
+    if (!fsr3 && !ip_side_post && ip_enabled() && g_settings.frame_gen && ui_mask_build(cb, b, fr)) cb = vk_cmd();
     if (smaa) {  // SMAA 1x: luma edges -> blending weights -> neighbourhood blending
         float w = (float)b->width, h = (float)b->height;
         float m[8] = {1.0f / w, 1.0f / h, w, h};
@@ -4874,25 +4922,8 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
         }
         float A = ao.proj[2], B = ao.proj[3];
         VkImage mask = VK_NULL_HANDLE;
-        TexBackend *mt = NULL;
-        // the image the copy was made of, as it is now: the presented one, or the last pass's input (before its colour
-        // grading, like the copy)
-        TexBackend *now = ui_snap_of == b ? b : ui_snap_of == ui_final_src && ui_final_frame == fr ? ui_final_src : NULL;
-        if (!nh && ui_snap_frame == fr && ui_snap && now && ui_snap->width == b->width && ui_snap->height == b->height) {
-            TexBackend *m = mt = post_image(26, b->width, b->height);
-            VkImageView mi[4] = {raw_view(now), post_view(ui_snap)};
-            post_pass_view(cb, post_pipeline("ui_mask.frag"), mi, 2, post_view(m), b->width, b->height, pz, 32, false, false);
-            vk_full_barrier(cb);
-            mask = m->image;
-            static long dump_at = -2;  // (LARECOMP_FSR3_MASK_DUMP=<frame>: the mask -> build/frames/uimask_<frame>.png)
-            if (dump_at == -2) dump_at = getenv("LARECOMP_FSR3_MASK_DUMP") ? atol(getenv("LARECOMP_FSR3_MASK_DUMP")) : -1;
-            if (dump_at >= 0 && (long)fr == dump_at) {
-                char path[64];
-                snprintf(path, sizeof path, "build/frames/uimask_%05ld.png", dump_at);
-                renderer_save_texture_tex(m, path);
-                cb = vk_cmd();
-            }
-        }
+        TexBackend *mt = nh ? NULL : ui_mask_build(cb, b, fr);
+        if (mt) mask = mt->image, cb = vk_cmd();  // (a dump submits the command buffer)
         gp_mark(cb, "ours: FSR 3.1%s", ip_side_post ? " side resolve (in-between)" : "");
         Fsr3Dispatch d = {.color = in->image, .depth = dr ? dr->image : VK_NULL_HANDLE, .mv = mv->image, .mask = mask, .output = out->image,
                           .rw = b->width, .rh = b->height, .ow = ow, .oh = oh, .mvw = mv->width, .mvh = mv->height,
@@ -4926,10 +4957,28 @@ static VkImageView post_process_ex(VkCommandBuffer cb, TexBackend *b, double ow_
                 post_pass(cb, "rcas.frag", ri_, 1, r, pr, false);
                 v = post_view(r), rb_ = r;
             }
+            TexBackend *u = ip_ui_keep(cb, rb_, nh, false);  // (its interface: N's, ip_ui_keep)
+            v = post_view(u), rb_ = u;
         } else if (!vk_tex_lo_active() && fsr3_dispatch(cb, &d)) {  // (a reduced image never: below, FSR 1)
             // (its compute writes: the next post pass's barrier, or the end's, waits for them)
             v = post_view(out), rb_ = out;
             fsr3_engaged = true, fsr3_rw = b->width, fsr3_rh = b->height, fsr3_ow = ow;
+            // The interface after the upscale: FSR 3.1 rebuilds the image as the jittered scene's, the interface too (it is
+            // drawn into the same image, not jittered) - with the mask as its transparency and composition one it takes
+            // little history there, but each frame's interface lands where that frame's jitter puts it: at 4K (Quality,
+            // 1.5x) text and boxes moved a pixel from one frame to the next (shifts of 1 px, the frame's jitter), at the
+            // game's rate under in-between images that keep N's. Where the mask says interface, the output takes the
+            // image itself, Catmull-Rom from the render size (it is not jittered): still. LARECOMP_FSR3_UI_COMPOSITE=0
+            // compares.
+            static int uic = -1;
+            if (uic < 0) uic = getenv("LARECOMP_FSR3_UI_COMPOSITE") ? atoi(getenv("LARECOMP_FSR3_UI_COMPOSITE")) : 1;
+            if (uic && mt) {
+                TexBackend *c = post_image(37, ow, oh);
+                float pc[8] = {1.0f / (float)ow, 1.0f / (float)oh};
+                VkImageView ci[4] = {post_view(out), raw_view(in), post_view(mt)};
+                post_pass_view(cb, post_pipeline("ui_composite.frag"), ci, 3, post_view(c), ow, oh, pc, 32, false, false);
+                v = post_view(c), rb_ = c;
+            }
         } else {
             fsr3_engaged = false;
             fsr = true;  // (FSR 1 below, this time)
@@ -6184,7 +6233,7 @@ static TexBackend *ip_lo_resolve(TexBackend *lo) {
         out = r;
     }
     out->sx = n->raw.sx, out->sy = n->raw.sy, out->scalable = n->raw.scalable;
-    return out;
+    return ip_ui_keep(cb, out, &n->raw, true);  // (its interface: N's)
 }
 // N's processed image (made at vk_interp_begin, before the in-between images), when it is at ow x oh
 static TexBackend *ip_n_post(double ow, double oh) {

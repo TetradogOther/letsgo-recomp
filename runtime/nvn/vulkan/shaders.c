@@ -985,6 +985,52 @@ static const char *builtin_src(const char *name, int *stage) {
                "  o = vec4(mix(c, hc, pc.b.x), 1.0);\n"
                "}\n";
     }
+    // FSR 3.1's output with the interface composited after it (exec.c post_process_ex): t0 = FSR's output, t1 = the image
+    // it was given (the render size, the interface not jittered), m = the interface mask (render size). Where the mask
+    // says interface (bilinear: its edges blend), t1 by Catmull-Rom (5 bilinear taps, as side_resolve.frag's history).
+    // a.xy = 1 / the output's size.
+    if (!strcmp(name, "ui_composite.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t0;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D t1;\n"
+               "layout(set = 0, binding = 2) uniform sampler2D m;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "vec3 cr(vec2 uv) {\n"
+               "  vec2 sz = vec2(textureSize(t1, 0)), p = uv * sz, c1 = floor(p - 0.5) + 0.5, f = p - c1;\n"
+               "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+               "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);\n"
+               "  vec2 w12 = w1 + w2, q0 = (c1 - 1.0) / sz, q3 = (c1 + 2.0) / sz, q12 = (c1 + w2 / w12) / sz;\n"
+               "  vec3 r = texture(t1, vec2(q12.x, q0.y)).rgb * w12.x * w0.y + texture(t1, vec2(q0.x, q12.y)).rgb * w0.x * w12.y\n"
+               "         + texture(t1, q12).rgb * w12.x * w12.y + texture(t1, vec2(q3.x, q12.y)).rgb * w3.x * w12.y\n"
+               "         + texture(t1, vec2(q12.x, q3.y)).rgb * w12.x * w3.y;\n"
+               "  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;\n"
+               "  return clamp(r / ws, 0.0, 1.0);\n"
+               "}\n"
+               "void main() {\n"
+               "  vec2 uv = gl_FragCoord.xy * pc.a.xy;\n"
+               "  vec3 f = texelFetch(t0, ivec2(gl_FragCoord.xy), 0).rgb;\n"
+               "  float k = texture(m, uv).r;\n"
+               "  o = vec4(k > 0.0 ? mix(f, cr(uv), k) : f, 1.0);\n"
+               "}\n";
+    }
+    // An in-between image with frame N's interface where N's mask says interface (exec.c ip_ui_keep): t = the image,
+    // h = N's processed image of the same size, m = N's mask (the render size: sampled, any coverage counts - its edges'
+    // antialiasing too). a.xy = 1 / the size.
+    if (!strcmp(name, "ui_keep.frag")) {
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(set = 0, binding = 1) uniform sampler2D h;\n"
+               "layout(set = 0, binding = 2) uniform sampler2D m;\n"
+               "layout(push_constant) uniform P { vec4 a; vec4 b; } pc;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec2 uv = gl_FragCoord.xy * pc.a.xy;\n"
+               "  o = vec4(texture(m, uv).r > 0.0 ? texture(h, uv).rgb : texelFetch(t, ivec2(gl_FragCoord.xy), 0).rgb, 1.0);\n"
+               "}\n";
+    }
     // A post image back into a target (b.xy = 1 / the output's size; sampled, the sizes may differ): TAA's result into
     // the game's scene
     if (!strcmp(name, "copy.frag")) {
