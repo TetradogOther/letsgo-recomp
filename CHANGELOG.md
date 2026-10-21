@@ -12,6 +12,24 @@
 - **F12 menu: A / B follow the controller layout**: with the Xbox layout, A (bottom) confirms and B (right) closes, as
   in the game; it was the Nintendo positions whatever the layout.
 
+- **Frame generation: grass coming into view no longer shows ahead of the ground** (Route 2, walking down out of the
+  gate after going in and out: clumps at the top left not drawn right in the in-between images). A copy of a mesh with
+  no partner in the frame before (it comes into view this frame: its closest copy there is 700 - 2500 units away, the
+  others' partners taken) kept all of frame N's constants - the camera folded into them too, while the images around it
+  have the camera part of the way from N-1: with the camera scrolling, those clumps were drawn ahead of everything else.
+  Now each of its words changes from N as the nearest copy of it that has a partner changes at that word: still where
+  both are still (where it stands, its pose), moving with the camera and the light where those are folded in.
+  `LARECOMP_INTERP_SIBLING=0` compares; the walk used for comparisons the same with and without it (flicker 0.99 % of the
+  blocks, detail and halfway placement equal). (Its words now go into the present's blend plan too: the second and third
+  in-between images had gone back to N's camera.)
+- **Frame generation: turning things keep their shape** - the tall grass rustling round a wild Pokemon (Route 2): each
+  clump has eight bones, and they swing tens of degrees a frame; blended term by term, a matrix half-way between two
+  orientations is not a rotation any more and shrinks and shears what it moves (by cos(angle / 2): 30 degrees, 3 %; 90,
+  29 %) - blades cut short and bent in the in-between images. Any three rows of a constant buffer that hold a rotation
+  with a uniform scale in both frames, turned by 3 to 150 degrees, are now blended along the arc (Rodrigues' rotation
+  about the axis between them, the scale and the translation along the line), in the present's blend plan as well.
+  `LARECOMP_INTERP_SLERP=0` compares.
+
 - **Frame generation: the interface no longer flickers in battles** (and wherever text or boxes sit over a moving
   scene): with FSR 3.1, or with the in-between images at a reduced size, an in-between image is resolved against frame
   N's image along the motion vectors of the scene under each pixel - the interface's too, so static text took N's text

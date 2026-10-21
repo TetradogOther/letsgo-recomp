@@ -732,6 +732,7 @@ static uint32_t ip_draw_occ;  // which occurrence of its identity this draw is, 
 static uint32_t ip_occ_next(uint64_t sig);
 static uint64_t ip_draw_shape;  // the draw without its vertex buffer's address or object (ip_pair_draw)
 static bool ip_part_set;  // (the replay: this draw's partner in N-1, ip_pair_draw)
+static int32_t ip_sib = -1;  // (... none: a sibling of N with one - its words shared follow it, ip_cbuf)
 static void ip_draw_record(void);
 static void ip_pair_draw(void);
 static uint64_t ip_part_sig;
@@ -3026,6 +3027,8 @@ static uint64_t ip_stats_curved;  // (words blended along the curve)
 static uint64_t ip_stats_alt;     // (words alternating between two values: kept at N)
 static uint64_t ip_stats_other_copy;  // (draws whose closest partner by content was another copy: kept at N)
 static uint64_t ip_stats_taken;       // (draws whose partner was closer to another draw: kept at N, ip_pair_all)
+static uint64_t ip_stats_sib;         // (cbufs of draws without a partner whose shared words followed a sibling)
+static uint64_t ip_stats_sibw[4];     // (research: no sibling, with one, its cbuf not found, nothing shared moved)
 // The quadratic through c (N-2, at -1), a (N-1, at 0) and b (N, at 1), at t
 static float ip_curve3(float c, float a, float b, float t) { return a + t * (b - c) * 0.5f + t * t * (b - 2.0f * a + c) * 0.5f; }
 // ... for a word that moved in both steps by a smooth change: its acceleration (b - 2a + c) at most a quarter of the two
@@ -3232,7 +3235,7 @@ static void draw_(CmdRec *r, bool indexed) {
         for (int i = 0; i < draw_nargs(indexed); i++) sh = (sh ^ r->x[i]) * 0x100000001B3ull;
         ip_draw_shape = sh;
         ip_draw_occ = ip_occ_next(h);
-        ip_part_set = false;
+        ip_part_set = false, ip_sib = -1;
         {   // LARECOMP_INTERP_SIG_LOG=<present>:<cbuf size>: what identifies each draw binding a cbuf of that size, at that
             // present and the next (research: draws that find no match in the previous frame)
             static long at = -2, sz;
@@ -5347,6 +5350,7 @@ typedef struct {
     // each draw's partner in the frame before (ip_pair_all, once for the present's in-between images): its index there,
     // IP_PAIR_ANY (none found: ip_cbuf's ip_pick decides) or IP_PAIR_NONE (frame N's constants)
     int32_t *pair;
+    int32_t *sib;  // (for a draw without a partner: a draw of N of its shape that has one, or -1)
     float *pair_dist;
     uint32_t paircap;
     bool paired;
@@ -5638,6 +5642,18 @@ static int ip_pair_cmp(const void *x, const void *y) {
     float a = f->pair_dist[*(const uint32_t *)x], b = f->pair_dist[*(const uint32_t *)y];
     return a < b ? -1 : a > b;
 }
+// How far draw c (also N) is from draw n: as ip_draw_dist, both of this frame
+static float ip_draw_dist_nn(const IpDraw *n, const IpDraw *c, float limit) {
+    const IpFrame *fn = &ipf[ipc];
+    if (c->count != n->count || !n->count) return INFINITY;
+    float d = 0;
+    for (uint32_t i = 0; i < n->count && d < limit; i++) {
+        const IpEntry *en = &fn->e[n->first + i], *ec = &fn->e[c->first + i];
+        if (en->stage != ec->stage || en->k != ec->k || en->size != ec->size) return INFINITY;
+        d += mvo_dist((const uint32_t *)(fn->data + ec->off), (const uint32_t *)(fn->data + en->off), en->size / 4, limit - d);
+    }
+    return d;
+}
 static void ip_pair_all(void) {
     IpFrame *f = &ipf[ipc], *fc = &ipf[IP_PREV];
     f->paired = true;
@@ -5645,6 +5661,7 @@ static void ip_pair_all(void) {
         f->paircap = f->ndr * 2;
         f->pair = realloc(f->pair, f->paircap * sizeof *f->pair);
         f->pair_dist = realloc(f->pair_dist, f->paircap * sizeof *f->pair_dist);
+        f->sib = realloc(f->sib, f->paircap * sizeof *f->sib);
     }
     uint32_t *order = malloc((f->ndr + 1) * sizeof *order), no = 0;
     for (uint32_t i = 0; i < f->ndr; i++) {
@@ -5664,6 +5681,26 @@ static void ip_pair_all(void) {
         free(taken);
     }
     free(order);
+    // A draw left without a partner (a copy coming into view) and a draw of N of the same shape that has one: its
+    // sibling (ip_cbuf - the words the two share move as the sibling's do)
+    uint32_t *by_shape = malloc((f->ndr + 1) * sizeof *by_shape), nb = 0;
+    for (uint32_t i = 0; i < f->ndr; i++) {
+        f->sib[i] = -1;
+        if (f->pair[i] >= 0) by_shape[nb++] = i;
+    }
+    ip_shape_frame = f;
+    qsort(by_shape, nb, sizeof *by_shape, ip_shape_cmp);
+    for (uint32_t i = 0; i < f->ndr; i++) {
+        if (f->pair[i] != IP_PAIR_NONE) continue;
+        uint32_t lo = 0, hi = nb;
+        while (lo < hi) { uint32_t m = (lo + hi) / 2; if (f->dr[by_shape[m]].shape < f->dr[i].shape) lo = m + 1; else hi = m; }
+        float bd = INFINITY;  // (the nearest: a copy beside it moves on the screen as it would)
+        for (uint32_t j = lo, tried = 0; j < nb && tried < 512 && f->dr[by_shape[j]].shape == f->dr[i].shape; j++, tried++) {
+            float d = ip_draw_dist_nn(&f->dr[i], &f->dr[by_shape[j]], bd);
+            if (d < bd) bd = d, f->sib[i] = (int32_t)by_shape[j];
+        }
+    }
+    free(by_shape);
 }
 // This 3D draw's partner (the replay, before its cbufs)
 static void ip_pair_draw(void) {
@@ -5673,7 +5710,7 @@ static void ip_pair_draw(void) {
     if (!f->paired) ip_pair_all();
     int32_t p = f->pair[n - f->dr];
     if (p == IP_PAIR_ANY) return;
-    if (p == IP_PAIR_NONE) { ip_part_set = true, ip_part_sig = 0, ip_part_occ = ~0u; return; }
+    if (p == IP_PAIR_NONE) { ip_part_set = true, ip_part_sig = 0, ip_part_occ = ~0u, ip_sib = f->sib[n - f->dr]; return; }
     ip_part_set = true, ip_part_sig = fc->dr[p].sig, ip_part_occ = fc->dr[p].occ;
 }
 
@@ -5785,7 +5822,10 @@ static bool ip_vtx_stream(int s, uint64_t addr, uint64_t need, uint32_t stride, 
 // Per entry of the recorded frame (its index): 1 none (bound as recorded), 2 frame N's own, 3 frame N's with the words
 // of `cnt` sparse entries from off blended (most of a buffer stays N's: copied whole, then those words written).
 typedef struct { uint32_t gen, kind, cnt; uint64_t off; } IpPlan;
-typedef struct { uint32_t i, kind; float c[3]; } IpPlanWord;  // kind 1: the polynomial; 2: a switch at t = 0.5 (c0 / c1: the bits)
+// kind 1: the polynomial; 2: a switch at t = 0.5 (c0 / c1: the bits); 3: a term of a turning matrix (ip_rot_blend):
+// (c3 + t c4) (c0 + sin(c5 t) c1 + (1 - cos(c5 t)) c2)
+#define IP_PC_N 6
+typedef struct { uint32_t i, kind; float c[IP_PC_N]; } IpPlanWord;
 static IpPlan *ip_plan;
 static uint32_t ip_plan_cap, ip_plan_cur = 1;
 static IpPlanWord *ip_pw;  // the present's blended words
@@ -5807,7 +5847,10 @@ static const void *ip_plan_eval(uint32_t ni, const IpEntry *n) {
     float t = ip_t;
     for (const IpPlanWord *w = ip_pw + pl->off, *e = w + pl->cnt; w < e; w++) {
         if (w->kind == 1) { float v = w->c[0] + t * (w->c[1] + t * w->c[2]); memcpy(&out[w->i], &v, 4); }
-        else memcpy(&out[w->i], t < 0.5f ? &w->c[0] : &w->c[1], 4);
+        else if (w->kind == 3) {
+            float a = w->c[5] * t, v = (w->c[3] + t * w->c[4]) * (w->c[0] + sinf(a) * w->c[1] + (1.0f - cosf(a)) * w->c[2]);
+            memcpy(&out[w->i], &v, 4);
+        } else memcpy(&out[w->i], t < 0.5f ? &w->c[0] : &w->c[1], 4);
     }
     return out;
 }
@@ -5820,7 +5863,7 @@ static bool ip_plan_capture_begin(const IpEntry *n) {
         memset(ip_plan + ip_plan_cap, 0, (nc - ip_plan_cap) * sizeof *ip_plan);
         ip_plan_cap = nc;
     }
-    if (!ip_pk) ip_pk = malloc(0x10000 / 4), ip_pc = malloc(0x10000 / 4 * 3 * sizeof *ip_pc);
+    if (!ip_pk) ip_pk = malloc(0x10000 / 4), ip_pc = malloc(0x10000 / 4 * IP_PC_N * sizeof *ip_pc);
     ip_cap_k = ip_pk;
     ip_cap_c = ip_pc;
     memset(ip_cap_k, 0, n->size / 4);  // (its words only)
@@ -5838,11 +5881,85 @@ static const void *ip_plan_capture_end(uint32_t ni, const IpEntry *n, const void
         if (ip_pk[i]) {
             IpPlanWord *w = &ip_pw[ip_pwn + pl->cnt++];
             w->i = i, w->kind = ip_pk[i];
-            memcpy(w->c, &ip_pc[i * 3], sizeof w->c);
+            memcpy(w->c, &ip_pc[i * IP_PC_N], sizeof w->c);
         }
     ip_pwn += pl->cnt;
     if (!pl->cnt) { pl->kind = 2; return nd; }  // (nothing blended: frame N's words as they are)
     return ip_plan_eval(ni, n);  // (this image too: every image of the present by the same arithmetic)
+}
+
+// Matrices that turn (ip_cbuf_blend, after its blend): three vec4 rows whose 3 x 3 part is a rotation with a uniform
+// scale in N-1 and in N, turned between them by more than 3 degrees, and blended along the line - they go along the
+// arc instead: A(t) = A(N-1) Rot(axis, angle t) (Rodrigues), the scale along the line. Blended term by term, a matrix
+// half-way between two orientations is not a rotation any more - it shrinks and shears what it moves (by cos(angle/2):
+// 30 degrees a frame, 3 %; 90, 29 %): the tall grass rustling round a wild Pokemon, a clump's eight bones swinging tens of
+// degrees a frame, drew blades cut short and bent in the in-between images (Route 2). The translation (the rows' fourth
+// words) stays along the line. LARECOMP_INTERP_SLERP=0 (comparison): term by term.
+static uint64_t ip_stats_rot;  // (matrices blended along the arc)
+static bool ip_rot_of(const float m[9], float *s) {  // (rows orthogonal and of one length: *s)
+    float n0 = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]), n1 = sqrtf(m[3] * m[3] + m[4] * m[4] + m[5] * m[5]),
+          n2 = sqrtf(m[6] * m[6] + m[7] * m[7] + m[8] * m[8]);
+    if (!(n0 > 1e-6f) || fabsf(n1 - n0) > 2e-3f * n0 || fabsf(n2 - n0) > 2e-3f * n0) return false;
+    float d01 = m[0] * m[3] + m[1] * m[4] + m[2] * m[5], d02 = m[0] * m[6] + m[1] * m[7] + m[2] * m[8],
+          d12 = m[3] * m[6] + m[4] * m[7] + m[5] * m[8], n2s = n0 * n0;
+    if (fabsf(d01) > 2e-3f * n2s || fabsf(d02) > 2e-3f * n2s || fabsf(d12) > 2e-3f * n2s) return false;
+    float det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    if (!(det > 0)) return false;
+    *s = n0;
+    return true;
+}
+static void ip_rot_blend(const uint32_t *a, const uint32_t *b, uint32_t *buf, uint32_t nw) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_INTERP_SLERP") ? atoi(getenv("LARECOMP_INTERP_SLERP")) : 1;
+    if (!on) return;
+    for (uint32_t g = 0; g + 11 <= nw && g < 1024; g += 4) {
+        static const int idx[9] = {0, 1, 2, 4, 5, 6, 8, 9, 10};
+        float ma[9], mb[9], sa, sb;
+        bool lin = true, any = false;
+        for (int j = 0; j < 9 && lin; j++) {
+            uint32_t w = g + idx[j];
+            memcpy(&ma[j], &a[w], 4), memcpy(&mb[j], &b[w], 4);
+            if (!isfinite(ma[j]) || !isfinite(mb[j])) { lin = false; break; }
+            if (a[w] == b[w]) { lin = buf[w] == b[w]; continue; }
+            any = true;
+            float v = ma[j] + (mb[j] - ma[j]) * ip_t, got;  // (blended along the line by the pass before: the same bits)
+            memcpy(&got, &buf[w], 4);
+            if (got != v || (ip_cap_k && ip_cap_k[w] != 1)) lin = false;
+        }
+        if (!lin || !any || !ip_rot_of(ma, &sa) || !ip_rot_of(mb, &sb) || sb > 2 * sa || sa > 2 * sb) continue;
+        float ra[9], rb[9];
+        for (int j = 0; j < 9; j++) ra[j] = ma[j] / sa, rb[j] = mb[j] / sb;
+        float rr[9];  // ra^T rb
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) rr[r * 3 + c] = ra[r] * rb[c] + ra[3 + r] * rb[3 + c] + ra[6 + r] * rb[6 + c];
+        float cs = (rr[0] + rr[4] + rr[8] - 1) * 0.5f;
+        cs = cs > 1 ? 1 : cs < -1 ? -1 : cs;
+        float th = acosf(cs), sn = sinf(th);
+        if (th < 0.05f || th > 2.6f || sn < 1e-3f) continue;  // (3 to 150 degrees: below, the line is the arc)
+        float ax = (rr[7] - rr[5]) / (2 * sn), ay = (rr[2] - rr[6]) / (2 * sn), az = (rr[3] - rr[1]) / (2 * sn);
+        float kk[9] = {0, -az, ay, az, 0, -ax, -ay, ax, 0}, k2[9], ak[9], ak2[9];
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) {
+                k2[r * 3 + c] = kk[r * 3] * kk[c] + kk[r * 3 + 1] * kk[3 + c] + kk[r * 3 + 2] * kk[6 + c];
+            }
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++) {
+                ak[r * 3 + c] = ra[r * 3] * kk[c] + ra[r * 3 + 1] * kk[3 + c] + ra[r * 3 + 2] * kk[6 + c];
+                ak2[r * 3 + c] = ra[r * 3] * k2[c] + ra[r * 3 + 1] * k2[3 + c] + ra[r * 3 + 2] * k2[6 + c];
+            }
+        float at = th * ip_t, s = sa + (sb - sa) * ip_t;
+        for (int j = 0; j < 9; j++) {
+            uint32_t w = g + idx[j];
+            float v = s * (ra[j] + sinf(at) * ak[j] + (1 - cosf(at)) * ak2[j]);
+            memcpy(&buf[w], &v, 4);
+            if (ip_cap_k) {
+                float *c = &ip_cap_c[w * IP_PC_N];
+                ip_cap_k[w] = 3, c[0] = ra[j], c[1] = ak[j], c[2] = ak2[j], c[3] = sa, c[4] = sb - sa, c[5] = th;
+            }
+        }
+        ip_stats_rot++;
+        g += 8;  // (its rows done: the next matrix after them)
+    }
 }
 
 static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry *n);
@@ -5958,6 +6075,62 @@ static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry 
         }
     }
     if (!ip_draw_obj || rejected) { ip_stats[1]++; return nd; }  // interface and other draws no object owns: their order and text change between frames, a blend smears them
+    // A copy coming into view, without a partner (ip_pair_all): each of its words changes from N as the nearest copy of
+    // it that has one (its sibling) does at that word - the sibling's own blend, applied as a change. Where the two are
+    // still (where they stand in the world, their pose) it stays N's; where the camera or the light is folded in, it
+    // moves as the copy beside it. Kept at N whole it was drawn with N's camera in images whose camera is part of the way
+    // from N-1: grass clumps coming into view while the camera scrolled sat ahead of the ground around them (Route 2,
+    // walking down out of the gate). LARECOMP_INTERP_SIBLING=0 (comparison): kept at N whole.
+    static int sib_on = -1;
+    if (sib_on < 0) sib_on = getenv("LARECOMP_INTERP_SIBLING") ? atoi(getenv("LARECOMP_INTERP_SIBLING")) : 1;
+    if (!o && sib_on && ip_part_set && ip_part_sig == 0) ip_stats_sibw[ip_sib < 0 ? 0 : 1]++;
+    if (!o && sib_on && ip_sib >= 0 && ip_part_set) {
+        const IpFrame *fn = &ipf[ipc], *fp = &ipf[IP_PREV];
+        const IpDraw *sd = &fn->dr[ip_sib];
+        int32_t sp = fn->pair[ip_sib];
+        const IpEntry *sn = NULL, *so = NULL;
+        for (uint32_t i = 0; sp >= 0 && i < sd->count; i++) {
+            const IpEntry *e = &fn->e[sd->first + i];
+            if (e->stage == stage && e->k == k && e->size == n->size) { sn = e; break; }
+        }
+        if (sn) {
+            const IpDraw *pd = &fp->dr[sp];
+            for (uint32_t i = 0; i < pd->count; i++) {
+                const IpEntry *e = &fp->e[pd->first + i];
+                if (e->stage == stage && e->k == k && e->size == n->size) { so = e; break; }
+            }
+        }
+        if (sn && so) {
+            static uint32_t sbuf[0x10000 / 4];
+            const uint32_t *b = (const uint32_t *)nd, *s1 = (const uint32_t *)(fn->data + sn->off), *s0 = (const uint32_t *)(fp->data + so->off);
+            uint32_t nw = n->size / 4, moved = 0;
+            memcpy(sbuf, nd, n->size);
+            bool jump = false;
+            for (uint32_t w = 0; w < nw && !jump; w++) {
+                if (s0[w] == s1[w]) continue;
+                float f0, f1, fb;
+                memcpy(&f0, &s0[w], 4);
+                memcpy(&f1, &s1[w], 4);
+                memcpy(&fb, &b[w], 4);
+                if (!isfinite(f0) || !isfinite(f1) || !isfinite(fb)) continue;
+                if (ip_jumps(f0, f1)) jump = true;  // (the sibling's own jumps: N whole, as before)
+            }
+            for (uint32_t w = 0; w < nw && !jump; w++) {
+                if (s0[w] == s1[w]) continue;
+                float f0, f1, fb;
+                memcpy(&f0, &s0[w], 4);
+                memcpy(&f1, &s1[w], 4);
+                memcpy(&fb, &b[w], 4);
+                if (!isfinite(f0) || !isfinite(f1) || !isfinite(fb)) continue;
+                float v = fb - (f1 - f0) * (1.0f - ip_t);
+                memcpy(&sbuf[w], &v, 4);
+                if (ip_cap_k) ip_cap_k[w] = 1, ip_cap_c[w * IP_PC_N] = fb - (f1 - f0), ip_cap_c[w * IP_PC_N + 1] = f1 - f0, ip_cap_c[w * IP_PC_N + 2] = 0;
+                moved++;
+            }
+            if (moved) { ip_stats_sib++; return sbuf; }
+            ip_stats_sibw[3]++;
+        } else ip_stats_sibw[2]++;
+    }
     if (!o || o->size != n->size) { ip_stats[1]++; if (!ip_kept_why) ip_kept_why = 1; return nd; }
     static uint32_t buf[0x10000 / 4];
     const uint32_t *a = (const uint32_t *)(ipf[IP_PREV].data + o->off), *b = (const uint32_t *)nd;
@@ -6037,7 +6210,7 @@ static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry 
         if (!bad && !jump && changed && !held_off && g < 256 && o->chg_known && !(o->chg & (1ull << (g / 4)))) {
             for (uint32_t i = g; i < g + m; i++) {
                 buf[i] = ip_t < 0.5f ? a[i] : b[i];
-                if (ip_cap_k) ip_cap_k[i] = 2, memcpy(&ip_cap_c[i * 3], &a[i], 4), memcpy(&ip_cap_c[i * 3 + 1], &b[i], 4);
+                if (ip_cap_k) ip_cap_k[i] = 2, memcpy(&ip_cap_c[i * IP_PC_N], &a[i], 4), memcpy(&ip_cap_c[i * IP_PC_N + 1], &b[i], 4);
             }
             ip_stats_held += changed;
             continue;
@@ -6067,11 +6240,11 @@ static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry 
                     float fc;
                     memcpy(&fc, &c3[i], 4);
                     v = ip_curve3(fc, fa, fb, ip_t);
-                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * 3] = fa, ip_cap_c[i * 3 + 1] = (fb - fc) * 0.5f,
-                                  ip_cap_c[i * 3 + 2] = (fb - 2.0f * fa + fc) * 0.5f;
+                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * IP_PC_N] = fa, ip_cap_c[i * IP_PC_N + 1] = (fb - fc) * 0.5f,
+                                  ip_cap_c[i * IP_PC_N + 2] = (fb - 2.0f * fa + fc) * 0.5f;
                 } else {
                     v = fa + (fb - fa) * ip_t;
-                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * 3] = fa, ip_cap_c[i * 3 + 1] = fb - fa, ip_cap_c[i * 3 + 2] = 0;
+                    if (ip_cap_k) ip_cap_k[i] = 1, ip_cap_c[i * IP_PC_N] = fa, ip_cap_c[i * IP_PC_N + 1] = fb - fa, ip_cap_c[i * IP_PC_N + 2] = 0;
                 }
                 memcpy(&buf[i], &v, 4);
             }
@@ -6083,6 +6256,7 @@ static const void *ip_cbuf_blend(int stage, int k, uint32_t size, const IpEntry 
             if (dg) { dg->jumps += jump ? changed : 0; dg->nonfloat += bad ? changed : 0; }
         }
     }
+    ip_rot_blend(a, b, buf, nw);
     if (n->size > nw * 4) memcpy((uint8_t *)buf + nw * 4, nd + nw * 4, n->size - nw * 4);
     ip_stats[0]++;
     if (ip_draw_2d && ip_kept_log_now()) {
@@ -6560,9 +6734,11 @@ void vk_interp_replay(float t) {
             (unsigned long long)ip_stats_content, (unsigned long long)ip_stats[3]);
     if (ip_stats[3] % 300 == 0 && getenv("LARECOMP_INTERP_DIAG")) ip_diag_dump();
     if (ip_stats[3] % 300 == 1)
-        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu, partner taken %llu; buffers of frame N reused %llu, copied again %llu\n",
+        LOG("[interp] draws with an object %llu, without %llu; vertices blended %llu; another copy as partner %llu, partner taken %llu (sibling-moved cbufs %llu; %llu %llu %llu %llu); matrices along the arc %llu; buffers of frame N reused %llu, copied again %llu\n",
             (unsigned long long)ip_stats_tagged, (unsigned long long)ip_stats_untagged, (unsigned long long)ip_stats_vtx,
-            (unsigned long long)ip_stats_other_copy, (unsigned long long)ip_stats_taken, (unsigned long long)vtx_memo_hits, (unsigned long long)vtx_memo_miss);
+            (unsigned long long)ip_stats_other_copy, (unsigned long long)ip_stats_taken, (unsigned long long)ip_stats_sib,
+            (unsigned long long)ip_stats_sibw[0], (unsigned long long)ip_stats_sibw[1], (unsigned long long)ip_stats_sibw[2], (unsigned long long)ip_stats_sibw[3], (unsigned long long)ip_stats_rot,
+            (unsigned long long)vtx_memo_hits, (unsigned long long)vtx_memo_miss);
 }
 
 // After the present's images: the next frame records into the other slot, from the state this one ended with
