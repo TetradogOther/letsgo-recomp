@@ -14,6 +14,12 @@ the controller layout and the menus in the game's own style.
   "close the game?" question and the name entry take the same look.
 - **F12 menu: A / B follow the controller layout**: with the Xbox layout, A (bottom) confirms and B (right) closes, as
   in the game; it was the Nintendo positions whatever the layout.
+- **The menus on one grid**: the setting rows, the buttons and the description box span the same width (their left
+  and right edges lined up with the title and the tabs), their text on one column; the values in the rows' right half
+  on every page; 12 px between rows and 24 between groups, in place of separator lines. The sliders are a slim track
+  with the value after it (it was written over the knob), and left / right step them too. On the start screen the
+  toggles (fullscreen, wild battles...), the key bindings and the mods are rows like the rest, and the buttons pills
+  on the same grid.
 - **Fixes the start screen opening in full screen** with `fullscreen = 1`: it took its own size, then went back to full
   screen at once (the setting is now applied to the game's window only).
 

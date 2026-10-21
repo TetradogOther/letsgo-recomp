@@ -269,7 +269,8 @@ void ui_frame_end(void) {
     ImDrawList *dl = ImGui::GetForegroundDrawList();
     float h = ImGui::GetFrameHeight() * 0.62f;
     ImRect n;
-    if (g_hot_set) cursor_arrow(dl, ImVec2(g_hot_row.Min.x + h * 0.25f, g_hot_row.GetCenter().y), h);
+    // (its tip on the pill's left end, before the text column)
+    if (g_hot_set) cursor_arrow(dl, ImVec2(g_hot_row.Min.x + ui_inset() * 0.6f, g_hot_row.GetCenter().y), h);
     else if (nav_rect(&n) && g.NavIdIsAlive && g.NavWindow->Active) cursor_arrow(dl, ImVec2(n.Min.x - 4 * ui_px(), n.GetCenter().y), h);
     g_hot_set = false;
     g_tip_last = g_tip_now, g_tip_now = NULL;
@@ -282,29 +283,138 @@ void ui_title(ImFont *title, const char *text) {
 }
 
 void ui_heading(const char *text) {
-    ImGui::Spacing();
+    if (ImGui::GetCursorPosY() > ImGui::GetCursorStartPos().y + 1) ImGui::Spacing();  // (a group's gap above it, not at the top)
     ImGui::TextColored(UI_HEADING, "%s", text);
 }
 
+// ---- the grid (settings_ui.h)
+float ui_inset(void) { return roundf(ImGui::GetFrameHeight() * 0.45f); }
+
+void ui_page_begin(const char *id, ImVec2 size) {
+    // (no side padding: the pills reach the page's edges; a little above and below for the cursor row's rim)
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, ImGui::GetStyle().ItemSpacing.y * 0.5f));
+    ImGui::BeginChild(id, size, ImGuiChildFlags_NavFlattened | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PopStyleVar();
+    ImGui::Indent(ui_inset());
+}
+void ui_page_end(void) {
+    ImGui::Unindent(ui_inset());
+    ImGui::EndChild();
+}
+
+void ui_group_gap(void) { ImGui::Spacing(); }
+
+// The pill of the row on the current line: from the page's left edge (the text column less the inset) to its right one
+static ImRect row_rect(void) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    return ImRect(ImVec2(p.x - ui_inset(), p.y), ImVec2(ImGui::GetCurrentWindow()->WorkRect.Max.x, p.y + ImGui::GetFrameHeight()));
+}
+
+bool ui_hot(ImVec2 a, ImVec2 b) {
+    ImRect r(a, b);
+    bool hot = rect_hot(r);
+    if (hot) g_hot_set = true, g_hot_row = r;
+    return hot;
+}
+
+bool ui_pill_row(void) {
+    ImRect r = row_rect();
+    g_row_hot = ui_hot(r.Min, r.Max);
+    ui_pill(ImGui::GetWindowDrawList(), r.Min, r.Max, g_row_hot);
+    return g_row_hot;
+}
+
+// The values' column: the pill's right half, so it stays put from one page to the next; after the longest label when
+// that doesn't fit (long translations)
 float ui_label_x(const char *const *labels, int n) {
     float w = 0;
     for (int i = 0; i < n; i++) w = fmaxf(w, ImGui::CalcTextSize(labels[i]).x);
-    return w + ImGui::GetCurrentWindow()->WindowPadding.x + ImGui::GetStyle().ItemSpacing.x * 2;  // (the page's own padding)
+    ImGuiWindow *win = ImGui::GetCurrentWindow();
+    float in = ui_inset(), x0 = ImGui::GetCursorScreenPos().x - in;
+    float half = x0 + (win->WorkRect.Max.x - x0) * 0.5f, fit = x0 + in + w + ImGui::GetStyle().ItemSpacing.x * 2;
+    return fmaxf(half, fit) - win->Pos.x;
 }
 
-// The row's pill from a little before the label to the right edge, yellow when it has the cursor
+// The row's pill, yellow when it has the cursor; its label on the text column
 void ui_row(const char *label, float x) {
-    ImGuiWindow *win = ImGui::GetCurrentWindow();
-    float h = ImGui::GetFrameHeight(), pad = h * 0.45f;
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImRect pill(ImVec2(p.x - pad, p.y), ImVec2(win->WorkRect.Max.x, p.y + h));
-    g_row_hot = rect_hot(pill);
-    if (g_row_hot) g_hot_set = true, g_hot_row = pill;
-    ui_pill(win->DrawList, pill.Min, pill.Max, g_row_hot);
+    ui_pill_row();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     ImGui::SameLine(x);
-    ImGui::SetNextItemWidth(-pad * 0.6f);
+    ImGui::SetNextItemWidth(-ui_inset() * 0.6f);
+}
+
+bool ui_button(const char *label, float width) {
+    ImGuiWindow *win = ImGui::GetCurrentWindow();
+    float in = ui_inset(), h = ImGui::GetFrameHeight();
+    const char *end = ImGui::FindRenderedTextEnd(label);
+    ImVec2 ts = ImGui::CalcTextSize(label, end), p = ImGui::GetCursorScreenPos();
+    float x0 = win->DC.IsSameLine ? p.x : p.x - in;  // (beside another item: where it ends, plus the spacing)
+    float w = width < 0 ? win->WorkRect.Max.x - x0 : width > 0 ? width : ts.x + in * 2;
+    ImGui::SetCursorScreenPos(ImVec2(x0, p.y));
+    bool hit = ImGui::InvisibleButton(label, ImVec2(w, h));
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+    bool hot = ui_hot(a, b) || ImGui::IsItemActive();
+    ui_pill(win->DrawList, a, b, hot);
+    if (!hot) win->DrawList->AddRect(a, b, ImGui::GetColorU32(ImGuiCol_Border), h * 0.5f, 0, 2 * ui_px());  // (a button, not a row)
+    win->DrawList->AddText(ImVec2(a.x + in, a.y + (h - ts.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), label, end);
+    return hit;
+}
+
+// (left / right on a focused item, not being dragged: a step of its value instead of a move to another item)
+static int lr_step(void) {
+    if (!ImGui::IsItemFocused() || ImGui::IsItemActive() || (GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled)) return 0;
+    bool l = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft) || ImGui::IsKeyPressed(ImGuiKey_LeftArrow);
+    bool r = ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight) || ImGui::IsKeyPressed(ImGuiKey_RightArrow);
+    if (l || r) ImGui::NavMoveRequestCancel();
+    return l == r ? 0 : l ? -1 : 1;
+}
+
+bool ui_slider(const char *id, float *v, float lo, float hi, const char *fmt, float step) {
+    ImGuiWindow *win = ImGui::GetCurrentWindow();
+    float old = *v, h = ImGui::GetFrameHeight(), in = ui_inset();
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    char txt[32], widest[32];
+    snprintf(txt, sizeof txt, fmt, *v);
+    // (room for the longest value, at least a "000%": the tracks of a page as long as each other)
+    snprintf(widest, sizeof widest, fmt, fabsf(hi) > fabsf(lo) ? hi : lo);
+    float vw = fmaxf(fmaxf(ImGui::CalcTextSize(widest).x, ImGui::CalcTextSize(txt).x), ImGui::CalcTextSize("000%").x);
+    float end = win->WorkRect.Max.x - in;
+    // ImGui's slider with nothing of its own drawn: it takes the clicks and drags, the track is drawn below
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, 0);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, 0);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrab, 0);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
+    ImGui::SetNextItemWidth(fmaxf(end - vw - in - p.x, h * 2));
+    ImGui::SliderFloat(id, v, lo, hi, "", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(5);
+    if (int s = lr_step()) *v = fminf(hi, fmaxf(lo, *v + s * step));
+    // the track (ImGui's own geometry: the knob where a click puts it), its filled part and the knob; the value after it
+    ImDrawList *dl = win->DrawList;
+    ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    float grab = ImGui::GetStyle().GrabMinSize, x0 = bb.Min.x + 2 + grab * 0.5f, x1 = bb.Max.x - 2 - grab * 0.5f;
+    float t = hi > lo ? (*v - lo) / (hi - lo) : 0, kx = x0 + (x1 - x0) * t, cy = bb.GetCenter().y, th = h * 0.18f, kr = h * 0.27f;
+    dl->AddRectFilled(ImVec2(x0 - th * 0.5f, cy - th * 0.5f), ImVec2(x1 + th * 0.5f, cy + th * 0.5f), ImGui::GetColorU32(IM_COL32(222, 232, 190, 255)), th);
+    dl->AddRectFilled(ImVec2(x0 - th * 0.5f, cy - th * 0.5f), ImVec2(kx, cy + th * 0.5f), ImGui::GetColorU32(ImGuiCol_PlotHistogram), th);
+    dl->AddCircleFilled(ImVec2(kx, cy), kr, ImGui::GetColorU32(IM_COL32_WHITE));
+    dl->AddCircle(ImVec2(kx, cy), kr, ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_SliderGrabActive : ImGuiCol_PlotHistogram), 0, h * 0.07f);
+    snprintf(txt, sizeof txt, fmt, *v);
+    ImVec2 ts = ImGui::CalcTextSize(txt);
+    dl->AddText(ImVec2(end - ts.x, cy - ts.y * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), txt);
+    return *v != old;
+}
+
+bool ui_value_button(const char *id, const char *text, ImU32 col) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = ImGui::CalcItemWidth(), h = ImGui::GetFrameHeight();
+    bool hit = ImGui::InvisibleButton(id, ImVec2(w, h));
+    ImVec2 ts = ImGui::CalcTextSize(text);
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x + (w - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f),
+                                        col ? col : ImGui::GetColorU32(ImGuiCol_Text), text);
+    return hit;
 }
 
 // A choice as in the game: its value centred, < > around it when the row has the cursor; left / right (d-pad, stick,
@@ -417,7 +527,7 @@ void ui_page_graphics(float x, bool known) {
                              "Mundo a 60 ou 120 fps; menus e Pokédex suavizados; batalhas e capturas continuam a 30.",
                              "Мир на 60 или 120 к/с; меню и Покедекс сглажены; бои и поимки остаются на 30."));
     }
-    ImGui::Separator();
+    ui_group_gap();
     // SSAO and GI by quality level (their parameters: settings_apply_levels; high = what they had before the levels)
     const char *lv[] = {UI_T("Off", "Desligado", "Выкл."), UI_T("Low", "Baixo", "Низкое"), UI_T("Medium", "Médio", "Среднее"),
                         UI_T("High", "Alto", "Высокое")};
@@ -446,7 +556,7 @@ void ui_page_graphics(float x, bool known) {
     ui_tip(UI_T("The edges of the shadows: as the game draws them, smoothed, or softer still.",
                 "As bordas das sombras: como o jogo as desenha, suavizadas ou ainda mais suaves.",
                 "Края теней: как рисует игра, сглаженные или ещё мягче."));
-    ImGui::Separator();
+    ui_group_gap();
     // anti-aliasing: SMAA on the final image (the interface too), TAA on the scene (jittered, motion vectors:
     // runtime/nvn/vulkan/exec.c taa_run) or FSR 3.1 (temporal, the interface masked: exec.c, fsr3.cpp), the last one
     // upscaling too, with its mode below. With the others a lower internal resolution is scaled bilinearly
@@ -475,7 +585,7 @@ void ui_page_graphics(float x, bool known) {
         // frame generation's in-between images take it too)
         float pct = g_settings.fsr3_sharpness * 100;
         ui_row(l[7], x);
-        if (ImGui::SliderFloat("##fsr3s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.fsr3_sharpness = pct / 100;
+        if (ui_slider("##fsr3s", &pct, 0, 100, "%.0f%%", 5)) g_settings.fsr3_sharpness = pct / 100;
         ui_tip(UI_T("FSR 3.1's own sharpening (RCAS, AMD's contrast-adaptive sharpening). 0% turns it off.",
                     "A nitidez do próprio FSR 3.1 (RCAS, o realce adaptativo de contraste da AMD). 0% desliga.",
                     "Собственная резкость FSR 3.1 (RCAS, адаптивное повышение резкости AMD). 0% — выкл."));
@@ -517,21 +627,22 @@ void ui_page_image_sound(void) {
         {l_vol, &g_settings.volume, 0.0f, 2.0f}, {l_bri, &g_settings.brightness, 0.5f, 1.5f},
         {l_con, &g_settings.contrast, 0.5f, 1.5f}, {l_sat, &g_settings.saturation, 0.0f, 2.0f}};
     for (int i = 0; i < 4; i++) {
-        if (i == 1) ImGui::Separator();
+        if (i == 1) ui_group_gap();
         float pct = *rows[i].v * 100;
         ui_row(rows[i].label, x);
         ImGui::PushID(100 + i);
-        if (ImGui::SliderFloat("##v", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) *rows[i].v = pct / 100;
+        if (ui_slider("##v", &pct, rows[i].lo * 100, rows[i].hi * 100, "%.0f%%", 5)) *rows[i].v = pct / 100;
         ImGui::PopID();
     }
     ImGui::BeginDisabled(g_settings.antialias != AA_TAA);  // (FSR 3.1's: the graphics page, under its mode)
     {
         float pct = g_settings.taa_sharpness * 100;
         ui_row(l_shp, x);
-        if (ImGui::SliderFloat("##taa_s", &pct, 0, 100, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) g_settings.taa_sharpness = pct / 100;
+        if (ui_slider("##taa_s", &pct, 0, 100, "%.0f%%", 5)) g_settings.taa_sharpness = pct / 100;
     }
     ImGui::EndDisabled();
-    if (ImGui::Button(UI_T("Reset", "Restaurar", "Сбросить"))) {
+    ui_group_gap();
+    if (ui_button(UI_T("Reset", "Restaurar", "Сбросить"))) {
         g_settings.volume = g_settings.brightness = g_settings.contrast = g_settings.saturation = 1.0f;
         g_settings.taa_sharpness = 0.5f;
     }
@@ -558,7 +669,8 @@ void ui_page_advanced(void) {
     ui_toggle("##gi_debug", l[2], x, &g_settings.gi_debug);
     ImGui::EndDisabled();
     ui_toggle("##mv_debug", l[3], x, &g_settings.mv_debug);
-    if (ImGui::Button(UI_T("Reset", "Restaurar", "Сбросить"))) {
+    ui_group_gap();
+    if (ui_button(UI_T("Reset", "Restaurar", "Сбросить"))) {
         g_settings.ssao_debug = g_settings.gi_debug = g_settings.mv_debug = false;
         g_settings.mv_objects = true;
     }

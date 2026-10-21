@@ -435,17 +435,18 @@ static float prompt(ImDrawList *dl, float x, float y, const char *key, ImU32 col
     return kw + gap + ts.x;
 }
 
-// The description box: the text of the setting under the cursor (ui_tip), else the page's, as large as fits in it
-static void description(ImDrawList *dl, ImVec2 a, ImVec2 b, const char *text) {
+// The description box: the text of the setting under the cursor (ui_tip), else the page's, on the rows' text column
+// with as much room above it as at its left; at the text's size unless it is longer than the box (smaller then)
+static void description(ImDrawList *dl, ImVec2 a, ImVec2 b, float pad_y, const char *text) {
     ui_info_box(dl, a, b);
-    float pad = (b.y - a.y) * 0.16f, ww = b.x - a.x - pad * 2.2f, hh = b.y - a.y - pad * 1.4f;
+    float in = ui_inset(), ww = b.x - a.x - in * 2, hh = b.y - a.y - pad_y * 2;
     ImFont *font = ImGui::GetFont();
     float size = ImGui::GetFontSize();
     for (float f = 1.0f; f >= 0.6f; f -= 0.05f) {
         size = ImGui::GetFontSize() * f;
         if (font->CalcTextSizeA(size, FLT_MAX, ww, text).y <= hh) break;
     }
-    dl->AddText(font, size, ImVec2(a.x + pad * 1.1f, a.y + pad * 0.7f), ImGui::GetColorU32(ImGuiCol_Text), text, NULL, ww);
+    dl->AddText(font, size, ImVec2(a.x + in, a.y + pad_y), ImGui::GetColorU32(ImGuiCol_Text), text, NULL, ww);
 }
 
 // F12: the settings, applied live (runtime/ui/settings_ui.mm: the start screen's pages); saved to larecomp.ini on closing.
@@ -500,35 +501,34 @@ static void cfg_draw(ImGuiIO &io, float scale) {
             x += w[t] + gap;
         }
         ImGui::PopItemFlag();
-        shoulder(x + gap, "R");
-        ImGui::SetCursorScreenPos(ImVec2(t0.x, t1.y + st.ItemSpacing.y * 0.5f));
+        shoulder(x, "R");  // (the row ends on the box's right edge)
+        ImGui::SetCursorScreenPos(ImVec2(t0.x, fmaxf(t1.y, y + fh * 0.5f) + 16 * scale));
     }
 
     // the description box: two lines of text
     {
-        ImVec2 a = ImGui::GetCursorScreenPos(), b(wp.x + ws.x - st.WindowPadding.x, a.y + ImGui::GetTextLineHeight() * 2.2f + 40 * scale);
+        float pad_y = ui_inset() * 0.75f;
+        ImVec2 a = ImGui::GetCursorScreenPos(), b(wp.x + ws.x - st.WindowPadding.x, a.y + ImGui::GetTextLineHeight() * 2 + pad_y * 2);
         const char *d = ui_tip_last();
-        description(dl, a, b, d ? d : M("Changes apply at once and are saved when this menu closes. Left / right change the highlighted setting.",
+        description(dl, a, b, pad_y, d ? d : M("Changes apply at once and are saved when this menu closes. Left / right change the highlighted setting.",
                                         "As mudanças valem na hora e são salvas ao fechar este menu. Esquerda / direita mudam a opção destacada.",
                                         "Изменения применяются сразу и сохраняются при закрытии меню. Влево / вправо — изменить выбранный параметр."));
-        ImGui::Dummy(ImVec2(b.x - a.x, b.y - a.y + st.ItemSpacing.y * 0.6f));
+        ImGui::Dummy(ImVec2(b.x - a.x, b.y - a.y + 16 * scale - st.ItemSpacing.y));  // (16 px to the page, as above the box)
     }
 
-    // the page, above the strip at the bottom; room at its left for the cursor's arrow
+    // the page, above the strip at the bottom: as wide as the box (the cursor's arrow in the window's margin)
     float strip = fh * 1.45f, page_h = wp.y + ws.y - strip - st.ItemSpacing.y - ImGui::GetCursorScreenPos().y;
     bool known = rt_addr(0x70002f8bb0ull) != 0;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(fh * 0.95f, 6 * scale));
     ImGui::PushID(g_cfg_tab);  // (each page its own scroll)
-    ImGui::BeginChild("##page", ImVec2(0, page_h), ImGuiChildFlags_NavFlattened | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ui_page_begin("##page", ImVec2(0, page_h));
     static int shown = -1;  // (another page: the cursor on its first setting)
     if (shown != g_cfg_tab && shown >= 0 && GImGui->NavCursorVisible) ImGui::SetKeyboardFocusHere();
     shown = g_cfg_tab;
     if (g_cfg_tab == 0) ui_page_graphics(ui_graphics_x(NULL, 0), known);
     else if (g_cfg_tab == 1) ui_page_image_sound();
     else ui_page_advanced();
-    ImGui::EndChild();
+    ui_page_end();
     ImGui::PopID();
-    ImGui::PopStyleVar();
 
     // the strip: L / R change the tab, B closes (Esc / F12 on a keyboard); a click on Close closes too
     bool close = !popup && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
