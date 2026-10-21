@@ -95,8 +95,8 @@ static void keys_section(void) {
             if (waiting) snprintf(lbl, sizeof lbl, "%s %d##k%d", T("Press a key...", "Aperte a tecla..."), (ms_left + 999) / 1000, slot);
             else snprintf(lbl, sizeof lbl, "%s##k%d", key_name(g_bind_key[slot]), slot);
             int pushed = 0;
-            if (waiting) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.42f, 0.12f, 1)); pushed++; }
-            if (!bind_is_default_slot(BIND_DEV_KEY, slot)) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.82f, 0.38f, 1)); pushed++; }
+            if (waiting) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.98f, 0.80f, 0.30f, 1)); pushed++; }
+            if (!bind_is_default_slot(BIND_DEV_KEY, slot)) { ImGui::PushStyleColor(ImGuiCol_Text, UI_GOLD); pushed++; }
             if (ImGui::Button(lbl, ImVec2(-FLT_MIN, 0))) {
                 if (waiting) bind_capture_cancel();
                 else bind_capture_begin(BIND_DEV_KEY, slot);
@@ -162,7 +162,7 @@ static void ui2x_section(bool ready, bool *on) {
                                          "O ampliador falhou (detalhes no lasrecomp.log): tente de novo.",
                                          "Não foi possível ler os arquivos do jogo ou gravar em cache/."};
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1), "%s", (g_pt ? pt : en)[st - UI2X_FAIL_DOWNLOAD]);
+        ImGui::TextColored(UI_RED_TEXT, "%s", (g_pt ? pt : en)[st - UI2X_FAIL_DOWNLOAD]);
     }
 }
 
@@ -414,8 +414,8 @@ static bool window_button(const char *id, bool close, float size) {
     bool hit = ImGui::InvisibleButton(id, ImVec2(size, size));
     ImDrawList *dl = ImGui::GetWindowDrawList();
     if (ImGui::IsItemHovered())
-        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), close ? IM_COL32(196, 43, 28, 255) : IM_COL32(255, 255, 255, 30), size * 0.2f);
-    ImU32 col = IM_COL32(230, 228, 220, 255);
+        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), close ? IM_COL32(196, 43, 28, 255) : IM_COL32(255, 255, 255, 150), size * 0.2f);
+    ImU32 col = close && ImGui::IsItemHovered() ? IM_COL32(255, 255, 255, 255) : IM_COL32(60, 62, 56, 255);
     float m = size * 0.34f, t = size * 0.06f > 1 ? size * 0.06f : 1;
     if (close) {
         dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + size - m, p.y + size - m), col, t);
@@ -463,9 +463,9 @@ extern "C" void launcher_lg_run(const char *root) {
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
-    static const float bg[4] = {0.06f, 0.09f, 0.08f, 1};  // (the F12 menu's panel colour)
-    const ImVec4 side_bg(0.035f, 0.055f, 0.045f, 1), gold(0.79f, 0.64f, 0.29f, 1), gold_hover(0.88f, 0.72f, 0.34f, 1),
-        gold_text(0.17f, 0.13f, 0.03f, 1);
+    static const float bg[4] = {0.86f, 0.93f, 0.47f, 1};  // (the F12 menu's look: ui_backdrop over it)
+    const ImVec4 side_bg(1, 1, 1, 0.55f), gold(0.98f, 0.82f, 0.22f, 1), gold_hover(1.0f, 0.88f, 0.38f, 1),
+        gold_text(0.23f, 0.18f, 0.03f, 1);
 
     while (!play) {
         menu_apply_window_requests(win);
@@ -528,6 +528,7 @@ extern "C" void launcher_lg_run(const char *root) {
                                              ImGuiWindowFlags_NoBringToFrontOnFocus);
         ImGui::PopStyleColor();
         ImGui::PopStyleVar(2);
+        ui_window_backdrop();
         float pad = 22 * s, side_w = 270 * s;
         g_drag_h = 70 * s, g_buttons_w = 120 * s;
 
@@ -552,12 +553,24 @@ extern "C" void launcher_lg_run(const char *root) {
             }
             ImGui::TextDisabled("v" RT_APP_VERSION);
             ImGui::Dummy(ImVec2(0, 14 * s));
+            // the pages: pills, the current one yellow (the selectables' own highlight off)
             ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_Header, 0);
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, 0);
+            ImGui::PushStyleColor(ImGuiCol_HeaderActive, 0);
             for (int t = 0; t < NTABS; t++) {
                 char label[64];
                 snprintf(label, sizeof label, "  %s##nav%d", names[t], t);
+                ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + ImGui::GetContentRegionAvail().x, a.y + 46 * s);
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                dl->ChannelsSplit(2);
+                dl->ChannelsSetCurrent(1);
                 if (ImGui::Selectable(label, tab == t, 0, ImVec2(0, 46 * s))) tab = t;
+                dl->ChannelsSetCurrent(0);
+                if (tab == t || ImGui::IsItemHovered() || ImGui::IsItemFocused()) ui_pill(dl, a, b, tab == t);
+                dl->ChannelsMerge();
             }
+            ImGui::PopStyleColor(3);
             ImGui::PopStyleVar();
             float play_h = 64 * s;
             ImGui::SetCursorPosY(fmaxf(ImGui::GetCursorPosY(), ImGui::GetWindowHeight() - pad - play_h));
@@ -566,10 +579,12 @@ extern "C" void launcher_lg_run(const char *root) {
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, gold_hover);
             ImGui::PushStyleColor(ImGuiCol_Text, gold_text);
             ImGui::PushFont(fonts.title);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
             ImGui::BeginDisabled(!ready);
             if (frame == 0 && ready) ImGui::SetKeyboardFocusHere();
             if (ImGui::Button(T("Play", "Jogar"), ImVec2(-FLT_MIN, play_h))) play = true;
             ImGui::EndDisabled();
+            ImGui::PopStyleVar();
             ImGui::PopFont();
             ImGui::PopStyleColor(4);
             if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -581,13 +596,11 @@ extern "C" void launcher_lg_run(const char *root) {
 
         // ---- the page
         ImGui::SameLine(0, 0);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad * 1.3f, pad));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad * 0.6f, pad));
         ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
                           ImGuiWindowFlags_NoScrollbar);
         {
-            ImGui::PushFont(fonts.title);
-            ImGui::TextColored(UI_GOLD, "%s", names[tab]);
-            ImGui::PopFont();
+            ui_title(fonts.title, names[tab]);
             {   // the window's buttons in its top right corner, side by side on one line (placed, not flowed after the title)
                 ImVec2 back = ImGui::GetCursorScreenPos(), wp = ImGui::GetWindowPos();
                 float bsz = 40 * s, gap = 6 * s, x = wp.x + ImGui::GetWindowWidth() - pad - bsz * 2 - gap, y = wp.y + pad * 0.6f;
@@ -598,7 +611,10 @@ extern "C" void launcher_lg_run(const char *root) {
                 ImGui::SetCursorScreenPos(back);
             }
             ImGui::Separator();
-            ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+            // (room at the page's left for the cursor's arrow)
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetFrameHeight() * 0.95f, 4 * s));
+            ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_NavFlattened | ImGuiChildFlags_AlwaysUseWindowPadding);
+            ImGui::PopStyleVar();
             if (tab == TAB_GAME) {
                 game_files_section(win);
                 ui_heading(T("Options", "Opções"));
@@ -619,7 +635,7 @@ extern "C" void launcher_lg_run(const char *root) {
                                          T("Xbox (A bottom, B right)", "Xbox (A embaixo, B à direita)")};
                     int lv = bind_layout();
                     ui_row(ll[0], lx);
-                    if (ImGui::Combo("##padlayout", &lv, lay, 2)) bind_set_layout(lv);
+                    if (ui_combo("##padlayout", &lv, lay, 2)) bind_set_layout(lv);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("%s", T("Which controller buttons are A / B and X / Y. Xbox swaps them, as the letters on an Xbox controller. The button prompts follow.",
                                                   "Quais botões do controle são A / B e X / Y. Xbox os troca, como as letras de um controle de Xbox. Os ícones dos botões acompanham."));
@@ -628,7 +644,7 @@ extern "C" void launcher_lg_run(const char *root) {
                 const char *extra[] = {T("Resolution", "Resolução")};
                 float x = ui_graphics_x(extra, 1);
                 ui_row(extra[0], x);
-                ImGui::Combo("##res", &res, g_pt ? res_pt : res_en, 5);
+                ui_combo("##res", &res, g_pt ? res_pt : res_en, 5);
                 ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("When the game starts.", "Ao começar o jogo."));
                 ImGui::Separator();
@@ -647,6 +663,7 @@ extern "C" void launcher_lg_run(const char *root) {
         ImGui::PopStyleVar();
         ImGui::End();
 
+        ui_frame_end();
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)vk_frame_cmd());
         bool shot = shot_at && ++frame == shot_at;

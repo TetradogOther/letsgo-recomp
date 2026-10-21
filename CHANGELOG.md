@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The F12 menu and the start screen look like the game's own menus** (its Options screen): a lime background with
+  big pale gears, slowly sliding stripes and halftone dots; each setting a white pill with dark text, the one under the
+  cursor yellow with a bobbing arrow at its left and `< >` around its value; the setting's description in a box with a
+  rainbow frame; the tabs as pills between L and R; the button prompts on a white strip at the bottom. All of it drawn
+  by the runtime from shapes and gradients (nothing of the game's). As in the game, left / right change the
+  highlighted setting at once (A still opens the list), and the on / off debug views are rows with their value. The
+  "close the game?" question and the name entry take the same look.
+- **F12 menu: A / B follow the controller layout**: with the Xbox layout, A (bottom) confirms and B (right) closes, as
+  in the game; it was the Nintendo positions whatever the layout.
+
 - **Frame generation: the interface no longer flickers in battles** (and wherever text or boxes sit over a moving
   scene): with FSR 3.1, or with the in-between images at a reduced size, an in-between image is resolved against frame
   N's image along the motion vectors of the scene under each pixel - the interface's too, so static text took N's text
