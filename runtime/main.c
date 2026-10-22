@@ -39,6 +39,7 @@ static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
 // Claim the guest address range before anything else can map there. The host allocator places
 // regions at random addresses in the same window; on a collision, re-exec for a fresh layout.
 __attribute__((constructor(101))) static void reserve_guest_space(void) {
+    plat_watch_writes(HEAP_BASE);  // (the heap's written pages: vertex data the GPU ring keeps from one frame to the next, exec.c)
     if (plat_reserve_guest(GUEST_LO, GUEST_HI)) return;
     const char *tries = getenv("LARECOMP_REEXEC");
     int n = tries ? atoi(tries) : 0;

@@ -449,3 +449,29 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   1920x1080 em foco 182-188 fps, 1280x720 em foco 151-158 (monitor de 300 Hz: não é o teto da tela).
 - **Para quem joga.** Com limite, sem efeito medido: Viridian a 60 fps com a janela composta deu 60,0 fps, p99 ~17,4 ms.
 - **Correção (medição).** `tools/perf_ab.py` traz a janela para a frente (sempre no topo, com foco) em cada rodada.
+
+## Viridian City: os vértices ficam na VRAM de um quadro para o outro (22/10/2026, issue #20)
+
+- **Diagnóstico.** 85% dos bytes de vértice copiados para a VRAM a cada quadro em Viridian eram iguais aos do quadro
+  anterior (`LARECOMP_VCOPY_SAME`): malhas paradas, copiadas de novo todo quadro (~12 MB). Conferir com hash custava o
+  mesmo que copiar.
+- **Correção.** O heap do jogo é reservado à parte com `MEM_WRITE_WATCH` (o Windows marca as páginas escritas por
+  qualquer um: o código do jogo, o nosso, o do sistema; `plat_written`). Uma cópia de vértices fica guardada em VRAM
+  (duas áreas de 128 MB, staging + VRAM, como o anel) e é usada de novo enquanto nenhuma página dela foi escrita depois
+  dela (uma época por página, anotada a cada consulta). O que o jogo reescreve a cada quadro (encontrado escrito em duas
+  consultas seguidas) vai para o anel como antes, testado de novo a cada 64. Quando a área ativa enche, a outra é
+  aposentada (suas cópias deixam de ser usadas) e esvaziada quando a GPU terminou de lê-la, sem espera. O serviço de
+  arquivos reescreve um byte de cada página lida para a memória do jogo, para o rastreio vê-la com certeza. Heap que
+  muda de tamanho ou reboot: tudo descartado. `LARECOMP_VK_KEEP_VERTICES=0` / `LARECOMP_WRITE_WATCH=0` desligam.
+- **Erros no caminho** (pegos nas medições, corrigidos antes do commit): esperar a GPU por uma área usada pelo quadro
+  ainda não enviado travava 10 s (Floresta); com as duas áreas lidas todo quadro, nenhuma ficava livre e o cache parava
+  de aceitar cópias; o contador de intervalos voláteis deixava recopiá-los a cada consulta.
+- **Medido.** Envio de vértices por quadro em Viridian 12,5 -> 2,6 MB (~4 GB a cada 2 s lidos das cópias guardadas).
+  A/B intercalado, mesmo exe, janela em primeiro plano, 4 + 4 rodadas: Viridian Eevee parado 201 -> 224 fps (razão
+  1,110, IC 95% 1,102-1,124), andando 185 -> 215 (1,162; 1,148-1,169), Pikachu andando 187 -> 215 (1,151;
+  1,145-1,162); Floresta +7-10% nas rodadas comparáveis (a câmera desse save varia). O rastreio sozinho, sem o cache:
+  sem custo medido (190,1 x 189,5 fps). Bateria dos dois jogos com e sem o cache, 3 repetições: `bateria_scan cmp` OK
+  nas 6 rotas, 0 crash; `capture_loop` na Floresta: o mundo volta igual depois dos encontros.
+- **Limites.** Só Windows (o Linux não tem o rastreio: fica desligado). Importação do heap no Vulkan com a região
+  rastreada testada só na NVIDIA; numa AMD ou Intel que recuse, o log mostra "guest heap import failed" e
+  `LARECOMP_WRITE_WATCH=0` volta ao antigo.

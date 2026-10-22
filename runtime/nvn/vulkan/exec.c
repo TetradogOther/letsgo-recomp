@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 
 #include "../../kernel.h"
+#include "../../platform.h"
 #include "shaders.h"
 #include "vk.h"
 #include "../renderer.h"
@@ -503,14 +504,18 @@ static VkSpan transient_gpu(uint64_t size, uint64_t align) { return transient_fr
 
 // The start of a submission: the staging bytes written since the last one go to VRAM (the upload buffer runs first, then a
 // barrier, vk_submit_extra).
+static Pool keep_pool;
 static void ring_flush_gpu(void) {
-    Pool *pl = &pools[1];
-    for (int i = 0; i < pl->n; i++) {
-        Chunk *c = &pl->c[i];
-        if (c->used <= c->flushed) continue;
-        VkBufferCopy rg = {c->flushed, c->flushed, c->used - c->flushed};
-        vkCmdCopyBuffer(vk_upload_cmd(), c->buf, c->dev, 1, &rg);
-        c->flushed = c->used;
+    Pool *pls[2] = {&pools[1], &keep_pool};  // (the ring, and the vertex data kept from frame to frame)
+    for (int k = 0; k < 2; k++) {
+        Pool *pl = pls[k];
+        for (int i = 0; i < pl->n; i++) {
+            Chunk *c = &pl->c[i];
+            if (c->used <= c->flushed) continue;
+            VkBufferCopy rg = {c->flushed, c->flushed, c->used - c->flushed};
+            vkCmdCopyBuffer(vk_upload_cmd(), c->buf, c->dev, 1, &rg);
+            c->flushed = c->used;
+        }
     }
 }
 
@@ -650,6 +655,115 @@ static VkSpan guest_copy_pool(uint64_t addr, uint64_t size, bool gpu) {  // (gpu
 }
 static VkSpan guest_copy(uint64_t addr, uint64_t size) { return guest_copy_pool(addr, size, false); }
 
+// ---- vertex data kept from one frame to the next
+// 85% of the vertex bytes copied to VRAM in Viridian City were the same as the frame before (LARECOMP_VCOPY_SAME): static meshes,
+// copied again every frame. A range copied here stays in VRAM, and a later frame reads it from there when the game has not
+// written its pages since: the OS tracks the heap's written pages (plat_written, any writer: the game's code, ours, the OS's),
+// and each check notes them in a per-page epoch, so a copy is good while all its pages are older than it. Two 128 MB areas
+// (staging + VRAM, as pool 1) filled in turn; one is reused once the GPU is done with it. The GPU's own writes (compute) are
+// never copied (gpuw: read in place). Dropped when the heap changes size (pages given back and taken again are not "written")
+// and at a reboot. LARECOMP_VK_KEEP_VERTICES=0: off (also where the platform can't track writes).
+#define KEEP_AREA (128ull << 20)
+#define KEEP_TAB 65536
+static Pool keep_pool = {.active = -1, .gpu = true};
+static uint64_t keep_gen[2], keep_seq[2];  // (an area's generation: bumped when it is emptied; the last submission reading it)
+static bool keep_retired[2];               // (its copies no longer used, waiting for the GPU to be done with them)
+static int keep_area = -1;
+static struct { uint64_t addr, len, epoch, gen, off; int area, dirty, skip; } keep[KEEP_TAB];
+static uint64_t *page_epoch;  // (the heap's pages: the epoch of the check that last found them written)
+static uint64_t keep_tick = 1, keep_heap;
+static uint64_t stat_keep_hits, stat_keep_bytes;  // (LARECOMP_VK_PROF: ranges / bytes read from a kept copy)
+static uint64_t stat_keep_new, stat_keep_volatile, stat_keep_busy;  // (... new copies kept; ranges the game rewrites, to the ring;
+                                                                     // to the ring because the other area was still in use)
+static int keep_state = -1;
+static bool keep_on(void) {
+    if (keep_state < 0) {
+        const char *e = getenv("LARECOMP_VK_KEEP_VERTICES");
+        uint64_t probe;
+        keep_state = (!e || atoi(e) != 0) && ring_gpu_enabled() && plat_written(HEAP_BASE, 4096, &probe, 1) >= 0;
+        if (keep_state) page_epoch = calloc((GUEST_HI - HEAP_BASE) >> 12, sizeof *page_epoch);
+        if (!page_epoch) keep_state = 0;
+        LOG("[vk] vertex data kept in VRAM from frame to frame: %s\n", keep_state ? "on (the heap's written pages are tracked)" : "off");
+    }
+    return keep_state;
+}
+static void keep_drop_all(void) {
+    for (int i = 0; i < 2; i++) keep_gen[i]++;
+    memset(keep, 0, sizeof keep);
+}
+// The pages of [a, a+n) written since the last look: noted with a new epoch. Returns that epoch.
+static uint64_t keep_look(uint64_t a, uint64_t n) {
+    static uint64_t pages[4096];
+    uint64_t tick = ++keep_tick;
+    int k = plat_written(a, n, pages, 4096);
+    if (k < 0 || k == 4096) {  // (not tracked, or maybe more than the list: all of it)
+        for (uint64_t pg = (a - HEAP_BASE) >> 12; pg <= (a + n - 1 - HEAP_BASE) >> 12; pg++) page_epoch[pg] = tick;
+    } else {
+        for (int i = 0; i < k; i++) page_epoch[(pages[i] - HEAP_BASE) >> 12] = tick;
+    }
+    return tick;
+}
+static bool keep_clean(uint64_t a, uint64_t n, uint64_t epoch) {
+    for (uint64_t pg = (a - HEAP_BASE) >> 12; pg <= (a + n - 1 - HEAP_BASE) >> 12; pg++)
+        if (page_epoch[pg] >= epoch) return false;
+    return true;
+}
+static void acopy_push(void *dst, const void *src, uint64_t n);
+static bool acopy_on(void);
+// A copy of [addr, addr+len) in VRAM for this submission: the kept one when still good, else a new one kept from now on.
+// False: not for this range - outside the heap, too big, off, rewritten by the game frame after frame (found written at two
+// checks in a row: to the ring, tried again every 64 checks), or no room without waiting for the GPU - copy it to the ring.
+static bool keep_copy(uint64_t addr, uint64_t len, VkSpan *out) {
+    if (!keep_on() || addr < HEAP_BASE || addr + len > GUEST_HI || len > KEEP_AREA / 8) return false;
+    if (kernel_heap_size() != keep_heap) { keep_heap = kernel_heap_size(); keep_drop_all(); }
+    uint32_t h = (uint32_t)((addr >> 4) * 0x9E3779B1u) & (KEEP_TAB - 1), at = h;
+    int found = -1;
+    for (int i = 0; i < 16; i++) {
+        uint32_t k = (h + i) & (KEEP_TAB - 1);
+        if (keep[k].addr == addr) { found = (int)k; break; }
+        if (!keep[k].addr || keep[k].gen != keep_gen[keep[k].area]) at = k;
+    }
+    if (found >= 0) at = (uint32_t)found;
+    uint64_t span = found >= 0 && keep[at].len > len ? keep[at].len : len;
+    keep_look(addr, span);
+    uint64_t pending = vk_pending_seq();
+    if (found >= 0 && keep[at].gen == keep_gen[keep[at].area] && keep[at].len >= len && keep_clean(addr, keep[at].len, keep[at].epoch)) {
+        Chunk *c = &keep_pool.c[keep[at].area];
+        keep_seq[keep[at].area] = pending;
+        keep[at].dirty = 0;
+        *out = (VkSpan){c->dev, keep[at].off, c->ptr + keep[at].off};
+        stat_keep_hits++, stat_keep_bytes += len;
+        return true;
+    }
+    int dirty = found >= 0 && keep[at].gen == keep_gen[keep[at].area] ? keep[at].dirty + 1 : 0;  // (still there, but written since its copy)
+    if (dirty >= 2 && ++keep[at].skip % 64) { keep[at].dirty = dirty; stat_keep_volatile++; return false; }
+    // a new copy, at the end of the current area (or the other one, emptied once the GPU is done with it)
+    if (keep_pool.n < 2) { new_chunk(&keep_pool, KEEP_AREA); new_chunk(&keep_pool, KEEP_AREA); keep_area = 0; }
+    Chunk *c = &keep_pool.c[keep_area];
+    uint64_t off = (c->used + 255) & ~255ull;
+    if (off + len > c->size) {
+        // Full: on to the other area, emptied, once the GPU is done with it. Its copies are dropped first (they'd be read every
+        // frame, and it would never be free), so the ranges in it go to the ring for the frames the GPU still needs, never a wait.
+        int o = keep_area ^ 1;
+        if (!keep_retired[o]) { keep_gen[o]++; keep_retired[o] = true; }
+        if (keep_seq[o] > vk_completed_seq()) { stat_keep_busy++; return false; }
+        keep_retired[o] = false;
+        keep_area = o;
+        c = &keep_pool.c[keep_area];
+        c->used = c->flushed = 0;
+        off = 0;
+    }
+    c->used = off + len;
+    keep_seq[keep_area] = pending;
+    if (len >= ACOPY_MIN && acopy_on()) acopy_push(c->ptr + off, (const void *)(uintptr_t)addr, len);
+    else memcpy(c->ptr + off, (const void *)(uintptr_t)addr, len);
+    keep[at].addr = addr, keep[at].len = len, keep[at].epoch = keep_tick + 1, keep[at].gen = keep_gen[keep_area], keep[at].off = off,
+    keep[at].area = keep_area, keep[at].dirty = dirty, keep[at].skip = 0;
+    stat_keep_new++;
+    *out = (VkSpan){c->dev, off, c->ptr + off};
+    return true;
+}
+
 // Vertex data copied to VRAM, once per start address and submission: every draw of a mesh starts at the same address and wants a
 // prefix of it (up to its largest index), so one copy serves them all. A per-vertex stream is copied whole (its bound range, up to
 // 8 MB) the first time, so that later draws of other parts of the buffer don't copy it again (37 MB a frame became 16).
@@ -669,7 +783,8 @@ static VkSpan vertex_copy(uint64_t addr, uint64_t need, uint64_t bound, bool per
     }
 copy:;
     uint64_t len = per_vertex && bound <= (8ull << 20) && bound > need ? bound : need;
-    VkSpan sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
+    VkSpan sp;
+    if (!keep_copy(addr, len, &sp)) sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
     if (prof && ENV("LARECOMP_VCOPY_SAME")) {  // (research: would a copy kept from an earlier frame still be good?)
         static struct { uint64_t addr, len, hash; } seen[8192];
         uint64_t hsh = len;
@@ -927,6 +1042,13 @@ const char *renderer_stats(void) {
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | gpu ring copies %.0f ms %.0f MB (waited %.0f ms), index scans %.0f ms",
                  prof_gcpy_ns / 1e6, prof_gcpy_bytes / 1048576.0, prof_gcpy_wait_ns / 1e6, prof_scan_ns / 1e6);
+        if (keep_state > 0) {
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, ", kept vertex copies read %llu (%.0f MB), new %llu, rewritten %llu, no room %llu",
+                     (unsigned long long)stat_keep_hits, stat_keep_bytes / 1048576.0, (unsigned long long)stat_keep_new,
+                     (unsigned long long)stat_keep_volatile, (unsigned long long)stat_keep_busy);
+            stat_keep_hits = stat_keep_bytes = stat_keep_new = stat_keep_volatile = stat_keep_busy = 0;
+        }
         if (prof_vall_bytes) {
             n = strlen(stats_text);
             snprintf(stats_text + n, sizeof stats_text - n, ", vertex bytes as last copied %.1f%%", 100.0 * prof_vsame_bytes / prof_vall_bytes);
@@ -2699,6 +2821,8 @@ void vk_exec_reset(void) {
     memset(pipe_tab, 0, sizeof pipe_tab);
     g_cs_n = 0;
     gpuw.n = gpur.n = 0;  // (guest memory is replaced)
+    keep_drop_all();
+    keep_heap = 0;
     gcopy_gen++;
     if (gmem_buf) {
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
