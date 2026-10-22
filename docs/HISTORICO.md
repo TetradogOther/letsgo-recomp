@@ -423,3 +423,17 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   Bateria dos dois jogos, 2 repetições, com e sem: 0 crash, piscadas iguais.
 - **Nota de teste.** No Git Bash, pôr `/c/msys64/usr/bin` na frente do `PATH` faz scripts rodarem no bash do MSYS2, e as
   variáveis exportadas não chegam (`TAG`, `REPS` da bateria, `LARECOMP_*`): não trocar o `PATH` antes de chamar scripts.
+
+## Viridian City: girar antes de dormir nas esperas de condição - testado e não adotado (22/10/2026, issue #20)
+
+- **Contexto.** Depois das duas correções do backend, Viridian fica limitada pelas três threads do jogo: cada uma passa
+  ~45-55% do tempo esperando as outras em `WaitProcessWideKeyAtomic`; o resto é quase todo código do jogo recompilado,
+  sem função dominante (amostragem do ponteiro de instrução das threads, ~500 Hz; o runtime é ~5%).
+- **Medido** (`LARECOMP_PROF_CONDVAR`, novo): ~8.000 acordadas a cada 2 s, latência média de ~8-9 µs (~70 ms somados),
+  quase metade das esperas abaixo de 50 µs.
+- **Experimento.** Girar até 40 µs no próprio estado de espera antes de dormir (como os mutexes, HISTORICO 57). A
+  latência somada caiu para ~45 ms, mas o A/B intercalado (4 + 4 rodadas por cena) não mostrou ganho: Eevee parado
+  202 x 201 fps, andando ~187 x ~187, Pikachu andando ~185 x ~183. Removido; fica o medidor.
+- **Visto no A/B.** Rodadas lentas (~123-135 fps contra ~185-205) aparecem nas duas variantes, ao acaso: o mesmo exe é
+  bimodal nesta máquina (i5-14600KF, núcleos de desempenho e de eficiência). Hipótese a testar: as threads do jogo
+  caindo em núcleos de eficiência.
