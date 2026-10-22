@@ -397,3 +397,94 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
 - **Correção.** `menu_apply_window_requests` só aplica a tela cheia pedida por F11 / Alt+Enter. Pikachu com
   `fullscreen = 1`: launcher em 762x887, e o jogo em 1920x1080 depois de Jogar (`LARECOMP_LAUNCHER_AUTOPLAY` +
   `LARECOMP_WINDOW_SHOT`).
+
+## Viridian City lenta: cópias de buffer esperando a GPU (22/10/2026, issue #20)
+
+- **Sintoma.** Queda de FPS em Viridian City (issue #20, RX 7600 + i5-10400F). Medido aqui (0.5.0, i5-14600KF + RTX 3080,
+  1080p, sem limite, `LARECOMP_VK_PROF`): Viridian ~110-155 fps, a thread de renderização ocupada 89-93% do tempo
+  (~8 ms por quadro) e a GPU só ~1,5-3 ms. A cena mais pesada para a CPU do backend, mais que Pewter e a Floresta.
+- **Diagnóstico.** O perfil ganhou o tempo de CPU por tipo de comando (`ops:` na linha do `LARECOMP_VK_PROF`). Quase um
+  terço da thread era o comando 43, `CopyBufferToBuffer`: 2 por quadro, ~1,2 ms cada. `LARECOMP_LOG_B2B`: cópias de 112 e
+  32 bytes (constantes), nenhuma em memória que a GPU escreve.
+- **Causa.** A cópia chamava `renderer_flush()` antes do `memmove`: enviava o trabalho e esperava a GPU terminar tudo. Só
+  é preciso quando a GPU escreve a origem ou o destino, ou lê o destino direto da memória; os draws gravados antes
+  levaram cópias das constantes e dos vértices.
+- **Correção.** Espera só nesses casos: intervalos que a GPU escreve (`gpuw`), os storage buffers de shaders com memória
+  global (novo `gpur`, lido no lugar) e vértices lidos no lugar (anel de VRAM desligado). Depois do `memmove`,
+  `guest_copy_flush` (como no `UpdateUniformBuffer`). `LARECOMP_VK_COPY_WAIT=1` volta ao antigo. Viridian, A/B
+  intercalado no mesmo exe (4 + 4 rodadas por cena): Eevee parado 143 -> 180 fps, andando 146 -> 151, Pikachu andando
+  122 -> 143 (razão 1,175, IC 95% 1,08-1,23); o novo ganhou nas 12 duplas. Thread de renderização ~8,3 -> ~5,6 ms por
+  quadro. Bateria dos dois jogos, novo contra antigo: 0 crash, piscadas na faixa de sempre.
+- **Ainda aberto.** O mesmo exe varia muito entre rodadas nesta máquina (120-175 fps; núcleos de eficiência do 14600KF,
+  não confirmado). A cópia de vértices (~12-19 MB por quadro em Viridian) é o próximo custo da thread.
+
+## Viridian City: as cópias de vértices saem da thread de renderização (22/10/2026, issue #20)
+
+- **Diagnóstico.** Depois da correção acima, a maior fatia da thread de renderização em Viridian eram as cópias de
+  vértices e índices para o anel de VRAM: ~12 MB e ~1,1 ms por quadro (~10,6 GB/s); a varredura dos índices, ~0,05 ms.
+  `LARECOMP_VCOPY_SAME`: 85% dos bytes copiados iguais à cópia anterior, mas conferir com um hash custou o mesmo que
+  copiar; reaproveitar entre quadros pediria o rastreio de escrita do Windows na reserva do jogo (fica para depois).
+- **Correção.** A thread de renderização reserva o espaço no anel e grava o draw; duas threads auxiliares fazem as
+  cópias de 32 KB ou mais (em pedaços de 256 KB; a thread de renderização ajuda quando espera). Tudo termina antes do
+  envio que lê as cópias e antes de a própria thread escrever na memória do jogo no meio da lista (`UpdateUniformBuffer`,
+  cópia de buffer, cópia de textura para buffer, contadores). O jogo só reescreve vértices depois do fence do quadro,
+  que vem depois do envio. `LARECOMP_VK_ASYNC_COPY=0` volta ao antigo.
+- **Medido.** Viridian, CPU da thread de renderização ~5,6 -> ~3,6 ms por quadro (as auxiliares terminam antes do envio:
+  0 ms de espera). A/B intercalado, mesmo exe, 4 + 4 rodadas: Eevee parado 188 -> 196 fps (razão 1,044, IC 95%
+  1,027-1,057), andando 172 -> 181 (1,054; 1,037-1,063), Pikachu andando 171 -> 181 (1,061; 1,020-1,070); o novo ganhou
+  nas 12 duplas, p99 menor. A thread de renderização deixou de ser o gargalo em Viridian: o resto é das threads do jogo.
+  Bateria dos dois jogos, 2 repetições, com e sem: 0 crash, piscadas iguais.
+- **Nota de teste.** No Git Bash, pôr `/c/msys64/usr/bin` na frente do `PATH` faz scripts rodarem no bash do MSYS2, e as
+  variáveis exportadas não chegam (`TAG`, `REPS` da bateria, `LARECOMP_*`): não trocar o `PATH` antes de chamar scripts.
+
+## Viridian City: girar antes de dormir nas esperas de condição - testado e não adotado (22/10/2026, issue #20)
+
+- **Contexto.** Depois das duas correções do backend, Viridian fica limitada pelas três threads do jogo: cada uma passa
+  ~45-55% do tempo esperando as outras em `WaitProcessWideKeyAtomic`; o resto é quase todo código do jogo recompilado,
+  sem função dominante (amostragem do ponteiro de instrução das threads, ~500 Hz; o runtime é ~5%).
+- **Medido** (`LARECOMP_PROF_CONDVAR`, novo): ~8.000 acordadas a cada 2 s, latência média de ~8-9 µs (~70 ms somados),
+  quase metade das esperas abaixo de 50 µs.
+- **Experimento.** Girar até 40 µs no próprio estado de espera antes de dormir (como os mutexes, HISTORICO 57). A
+  latência somada caiu para ~45 ms, mas o A/B intercalado (4 + 4 rodadas por cena) não mostrou ganho: Eevee parado
+  202 x 201 fps, andando ~187 x ~187, Pikachu andando ~185 x ~183. Removido; fica o medidor.
+- **Visto no A/B.** Rodadas lentas (~123-135 fps contra ~185-205) aparecem nas duas variantes, ao acaso: o mesmo exe é
+  bimodal nesta máquina (i5-14600KF, núcleos de desempenho e de eficiência). Hipótese a testar: as threads do jogo
+  caindo em núcleos de eficiência.
+
+## Rodadas lentas nas medições: a janela composta pelo Windows, não os núcleos de eficiência (22/10/2026)
+
+- **Sintoma.** Nas medições de Viridian (sem limite de fps), o mesmo exe saía bimodal: ~185-205 fps ou ~115-140, ao acaso.
+- **Hipótese descartada.** Núcleos de eficiência do i5-14600KF: com o processo preso aos núcleos de desempenho (lógicos
+  0-11), e até a um lógico por núcleo de desempenho, as rodadas lentas continuaram; só nos de eficiência, 94-103 fps.
+- **Causa.** A janela do jogo: `nvidia-smi` e a janela em primeiro plano lidos a cada 0,5 s. Clock da GPU igual
+  (1875 MHz, P0) em todas; rodadas rápidas com a janela em foco e cobrindo a tela (carga da GPU ~50%), lentas com ela
+  atrás de outras ou menor que a tela (65-77%). O Windows compõe essas janelas (DWM) em vez de mostrá-las direto:
+  1920x1080 em foco 182-188 fps, 1280x720 em foco 151-158 (monitor de 300 Hz: não é o teto da tela).
+- **Para quem joga.** Com limite, sem efeito medido: Viridian a 60 fps com a janela composta deu 60,0 fps, p99 ~17,4 ms.
+- **Correção (medição).** `tools/perf_ab.py` traz a janela para a frente (sempre no topo, com foco) em cada rodada.
+
+## Viridian City: os vértices ficam na VRAM de um quadro para o outro (22/10/2026, issue #20)
+
+- **Diagnóstico.** 85% dos bytes de vértice copiados para a VRAM a cada quadro em Viridian eram iguais aos do quadro
+  anterior (`LARECOMP_VCOPY_SAME`): malhas paradas, copiadas de novo todo quadro (~12 MB). Conferir com hash custava o
+  mesmo que copiar.
+- **Correção.** O heap do jogo é reservado à parte com `MEM_WRITE_WATCH` (o Windows marca as páginas escritas por
+  qualquer um: o código do jogo, o nosso, o do sistema; `plat_written`). Uma cópia de vértices fica guardada em VRAM
+  (duas áreas de 128 MB, staging + VRAM, como o anel) e é usada de novo enquanto nenhuma página dela foi escrita depois
+  dela (uma época por página, anotada a cada consulta). O que o jogo reescreve a cada quadro (encontrado escrito em duas
+  consultas seguidas) vai para o anel como antes, testado de novo a cada 64. Quando a área ativa enche, a outra é
+  aposentada (suas cópias deixam de ser usadas) e esvaziada quando a GPU terminou de lê-la, sem espera. O serviço de
+  arquivos reescreve um byte de cada página lida para a memória do jogo, para o rastreio vê-la com certeza. Heap que
+  muda de tamanho ou reboot: tudo descartado. `LARECOMP_VK_KEEP_VERTICES=0` / `LARECOMP_WRITE_WATCH=0` desligam.
+- **Erros no caminho** (pegos nas medições, corrigidos antes do commit): esperar a GPU por uma área usada pelo quadro
+  ainda não enviado travava 10 s (Floresta); com as duas áreas lidas todo quadro, nenhuma ficava livre e o cache parava
+  de aceitar cópias; o contador de intervalos voláteis deixava recopiá-los a cada consulta.
+- **Medido.** Envio de vértices por quadro em Viridian 12,5 -> 2,6 MB (~4 GB a cada 2 s lidos das cópias guardadas).
+  A/B intercalado, mesmo exe, janela em primeiro plano, 4 + 4 rodadas: Viridian Eevee parado 201 -> 224 fps (razão
+  1,110, IC 95% 1,102-1,124), andando 185 -> 215 (1,162; 1,148-1,169), Pikachu andando 187 -> 215 (1,151;
+  1,145-1,162); Floresta +7-10% nas rodadas comparáveis (a câmera desse save varia). O rastreio sozinho, sem o cache:
+  sem custo medido (190,1 x 189,5 fps). Bateria dos dois jogos com e sem o cache, 3 repetições: `bateria_scan cmp` OK
+  nas 6 rotas, 0 crash; `capture_loop` na Floresta: o mundo volta igual depois dos encontros.
+- **Limites.** Só Windows (o Linux não tem o rastreio: fica desligado). Importação do heap no Vulkan com a região
+  rastreada testada só na NVIDIA; numa AMD ou Intel que recuse, o log mostra "guest heap import failed" e
+  `LARECOMP_WRITE_WATCH=0` volta ao antigo.

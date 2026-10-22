@@ -295,6 +295,16 @@ static void rom_index(int fd) {
 }
 
 // Virtual RomFS image read: original bytes, with the patched file table and appended replacement files.
+// Each page of a file read into guest memory written once more by us (the same byte back): the OS fills the buffer itself, and the
+// GPU ring's copies kept from frame to frame (runtime/nvn/vulkan/exec.c keep_copy) must see those pages as written for sure.
+static void touch_pages(uint64_t addr, ssize_t n) {
+    if (n <= 0) return;
+    for (uint64_t a = addr & ~0xFFFull; a < addr + (uint64_t)n; a += 0x1000) {
+        volatile uint8_t *p = (volatile uint8_t *)(uintptr_t)(a < addr ? addr : a);
+        *p = *p;
+    }
+}
+
 static ssize_t romfs_read(int fd, uint8_t *dst, uint64_t size, uint64_t off) {
     if (!ov_n) return pread(fd, dst, size, (off_t)off);
     uint64_t done = 0;
@@ -358,6 +368,7 @@ static void storage(Service *s, IpcReq *req, IpcResp *resp) {
         if (!b) { resp->result = MAKE_RESULT(2, 6001); break; }
         if (size > b->size) size = b->size;
         ssize_t n = romfs_read(st->fd, (uint8_t *)(uintptr_t)b->addr, size, off);
+        touch_pages(b->addr, n);
         if (n < 0) LOG("[fs] storage read failed at %llx: %s\n", off, strerror(errno));
         {
             const char *path = romfs_file_at(off);
@@ -453,6 +464,7 @@ static void file(Service *s, IpcReq *req, IpcResp *resp) {
         IpcBuf *b = out_buf(req, 0);
         if ((uint64_t)size > b->size) size = (int64_t)b->size;
         ssize_t n = pread(f->fd, (void *)(uintptr_t)b->addr, (size_t)size, off);
+        touch_pages(b->addr, n);
         if (strstr(f->path, "savedata")) {
             LOG("[save] read %s off %lld size %lld -> guest %llx\n", f->path, (long long)off, (long long)size, (unsigned long long)b->addr);
         }

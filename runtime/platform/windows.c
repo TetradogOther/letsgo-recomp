@@ -44,18 +44,48 @@ static LONG CALLBACK vectored_handler(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// The written-pages tracking (plat_watch_writes): the window's top part is a reservation of its own made with MEM_WRITE_WATCH
+// (the OS keeps a written bit per page; GetWriteWatch reads and clears them), so the rest pays nothing for it.
+static uint64_t g_watch_lo;
+
+bool plat_watch_writes(uint64_t watch_lo) {
+    const char *e = getenv("LARECOMP_WRITE_WATCH");
+    if (e && atoi(e) == 0) return false;
+    g_watch_lo = watch_lo;
+    return true;
+}
+
 bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
-    void *p = VirtualAlloc((void *)(uintptr_t)lo, hi - lo, MEM_RESERVE, PAGE_READWRITE);
+    uint64_t split = g_watch_lo > lo && g_watch_lo < hi ? g_watch_lo : hi;
+    void *p = VirtualAlloc((void *)(uintptr_t)lo, split - lo, MEM_RESERVE, PAGE_READWRITE);
     if (p != (void *)(uintptr_t)lo) return false;
+    if (split < hi && VirtualAlloc((void *)(uintptr_t)split, hi - split, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE) != (void *)(uintptr_t)split) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return false;
+    }
+    if (split == hi) g_watch_lo = 0;
     g_lo = lo;
     g_hi = hi;
     AddVectoredExceptionHandler(1, vectored_handler);
     return true;
 }
 
-// Decommit everything: the range stays reserved, and pages come back zeroed when committed again (lazily).
+// Decommit everything: the range stays reserved, and pages come back zeroed when committed again (lazily). (One call per
+// reservation: a decommit can't span two.)
 bool plat_reset_guest(uint64_t lo, uint64_t hi) {
-    return VirtualFree((void *)(uintptr_t)lo, hi - lo, MEM_DECOMMIT) != 0;
+    uint64_t split = g_watch_lo > lo && g_watch_lo < hi ? g_watch_lo : hi;
+    bool ok = VirtualFree((void *)(uintptr_t)lo, split - lo, MEM_DECOMMIT) != 0;
+    if (split < hi) ok = VirtualFree((void *)(uintptr_t)split, hi - split, MEM_DECOMMIT) != 0 && ok;
+    return ok;
+}
+
+int plat_written(uint64_t addr, uint64_t size, uint64_t *out, int max) {
+    if (!g_watch_lo || addr < g_watch_lo || addr + size > g_hi || max <= 0) return -1;
+    uint64_t a = addr & ~0xFFFull, e = (addr + size + 0xFFF) & ~0xFFFull;
+    ULONG_PTR n = (ULONG_PTR)max;
+    DWORD gran = 0;
+    if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, (void *)(uintptr_t)a, (SIZE_T)(e - a), (PVOID *)out, &n, &gran) != 0) return -1;
+    return (int)n;
 }
 
 void plat_commit(uint64_t addr, uint64_t size) {

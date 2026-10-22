@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 
 #include "../../kernel.h"
+#include "../../platform.h"
 #include "shaders.h"
 #include "vk.h"
 #include "../renderer.h"
@@ -45,9 +46,13 @@ static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU 
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
+static uint64_t prof_op_ns[CMD_COUNT], prof_op_n[CMD_COUNT];
+// (LARECOMP_VK_PROF: vertex / index data copied to the GPU ring - time and bytes - and the index scans; with LARECOMP_VCOPY_SAME=1
+// also how many of the vertex bytes copied were the same as the last copy of that range, a hash per range)
+static uint64_t prof_gcpy_ns, prof_gcpy_bytes, prof_scan_ns, prof_vsame_bytes, prof_vall_bytes, prof_gcpy_wait_ns;  // (LARECOMP_VK_PROF: the CPU time of each command type, nested lists apart)
 static uint64_t stat_vtx_copied, stat_vtx_direct;  // vertex / index ranges of the draws: copied to VRAM / read in place
 bool g_debug_frame;
-static char stats_text[1024];
+static char stats_text[2048];
 void vk_collect_dead(void);
 
 // ================================================================== submissions
@@ -268,10 +273,12 @@ void vk_gpuprof_report(void) {
 }
 
 static void ring_flush_gpu(void);
+static void acopy_drain(void);
 // Submit the pending work (if any). wait/signal: binary semaphores for presentation (may be null).
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra) {
     (void)extra;
     vk_end_pass();
+    acopy_drain();  // (the vertex / index copies this submission reads)
     ring_flush_gpu();
     Sub *s = sub();
     if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
@@ -398,7 +405,7 @@ __attribute__((target("avx2"))) static uint32_t scan_max32_avx2(const uint32_t *
     for (; i < n; i++) if (q[i] != restart && q[i] > m) m = q[i];
     return m;
 }
-static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
+static uint32_t scan_max_index_(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
     static int avx2 = -1;
     if (avx2 < 0) avx2 = __builtin_cpu_supports("avx2");
     uint32_t m = 0;
@@ -411,6 +418,12 @@ static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32
         const uint32_t *q = src;
         for (uint32_t i = 0; i < n; i++) if (q[i] > m && q[i] != restart) m = q[i];
     }
+    return m;
+}
+static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
+    PROF_T0();
+    uint32_t m = scan_max_index_(src, isz, n, restart);
+    PROF_ADD(prof_scan_ns);
     return m;
 }
 
@@ -506,21 +519,33 @@ static VkSpan transient_from(Pool *pl, uint64_t size, uint64_t align) {
 }
 
 VkSpan vk_transient(uint64_t size, uint64_t align) { return transient_from(&pools[0], size, align); }
-// The ring chunk a buffer is (pool * 4096 + index; -1: not the ring's - the game's heap imported, valid as long as it is),
-// and its epoch now
+// (the vertex data kept from frame to frame, keep_copy below: its areas are spans too)
+static Pool keep_pool;
+static uint64_t keep_gen[2], keep_seq[2];
+static bool keep_retired[2];
+// The ring chunk a buffer is (pool * 4096 + index; 2 * 4096 + area: a kept-vertex area; -1: not the ring's - the game's heap
+// imported, valid as long as it is), and its epoch now (a kept area's: its generation)
 static int span_chunk(VkBuffer b, uint32_t *epoch) {
     for (int p = 0; p < 2; p++)
         for (int i = 0; i < pools[p].n; i++) {
             Chunk *c = &pools[p].c[i];
             if (c->buf == b || (c->dev && c->dev == b)) { *epoch = c->epoch; return p * 4096 + i; }
         }
+    for (int i = 0; i < keep_pool.n && i < 2; i++)
+        if (keep_pool.c[i].dev == b) { *epoch = (uint32_t)keep_gen[i]; return 2 * 4096 + i; }
     *epoch = 0;
     return -1;
 }
 // A span kept from earlier in the frame used again: still the chunk's (epoch), and kept from being taken again until this
-// submission completes
+// submission completes (a kept-vertex area: same generation, not retired, and its last reader is this submission now)
 static bool span_still(int ck, uint32_t epoch) {
     if (ck < 0) return true;
+    if (ck / 4096 == 2) {
+        int a = ck % 4096;
+        if ((uint32_t)keep_gen[a] != epoch || keep_retired[a]) return false;
+        keep_seq[a] = vk_pending_seq();
+        return true;
+    }
     Chunk *c = &pools[ck / 4096].c[ck % 4096];
     if (c->epoch != epoch) return false;
     c->seq = vk_pending_seq();
@@ -532,13 +557,16 @@ static VkSpan transient_gpu(uint64_t size, uint64_t align) { return transient_fr
 // The start of a submission: the staging bytes written since the last one go to VRAM (the upload buffer runs first, then a
 // barrier, vk_submit_extra).
 static void ring_flush_gpu(void) {
-    Pool *pl = &pools[1];
-    for (int i = 0; i < pl->n; i++) {
-        Chunk *c = &pl->c[i];
-        if (c->used <= c->flushed) continue;
-        VkBufferCopy rg = {c->flushed, c->flushed, c->used - c->flushed};
-        vkCmdCopyBuffer(vk_upload_cmd(), c->buf, c->dev, 1, &rg);
-        c->flushed = c->used;
+    Pool *pls[2] = {&pools[1], &keep_pool};  // (the ring, and the vertex data kept from frame to frame)
+    for (int k = 0; k < 2; k++) {
+        Pool *pl = pls[k];
+        for (int i = 0; i < pl->n; i++) {
+            Chunk *c = &pl->c[i];
+            if (c->used <= c->flushed) continue;
+            VkBufferCopy rg = {c->flushed, c->flushed, c->used - c->flushed};
+            vkCmdCopyBuffer(vk_upload_cmd(), c->buf, c->dev, 1, &rg);
+            c->flushed = c->used;
+        }
     }
 }
 
@@ -587,9 +615,85 @@ static VkSpan copy_dedupe(int slot, const void *data, uint64_t size, uint64_t al
 static struct { uint64_t addr, size, seq; VkSpan span; bool gpu; } gcopy[GCOPY_TAB];
 static uint64_t gcopy_gen;  // bumped to drop every shared copy (guest memory written mid-list)
 static void guest_copy_flush(void) { gcopy_gen++; }
+// ---- vertex / index copies off the render thread
+// The draws' vertex and index data copied to the GPU ring (~12 MB a frame in Viridian City, ~1.1 ms: the render thread's
+// largest single cost after the buffer-copy waits) is filled in by two helper threads: the render thread reserves the ring
+// space and records the draw at once, a helper copies, and every copy is done before the submission that reads it
+// (vk_submit_extra) and before the render thread itself writes guest memory (acopy_drain in exec_list). Until the
+// submission the game leaves that memory alone: it rewrites vertex data only after the frame's fence, which follows the
+// submission. Copies under 32 KB stay in place; big ones go in 256 KB pieces. The render thread takes pieces too while it
+// waits. LARECOMP_VK_ASYNC_COPY=0 (or fewer than 4 logical processors): all in place, as before.
+#define ACOPY_MAX 4096
+#define ACOPY_MIN (32u << 10)
+#define ACOPY_PIECE (256u << 10)
+static struct { void *dst; const void *src; uint64_t n; } acq[ACOPY_MAX];
+static _Atomic uint64_t acq_pushed, acq_taken, acq_done;  // (counters only grow: a job is acq[i % ACOPY_MAX])
+static pthread_mutex_t acq_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t acq_cond = PTHREAD_COND_INITIALIZER;
+static int acq_sleeping;
+
+static bool acopy_take_one(void) {
+    uint64_t t = atomic_load(&acq_taken);
+    for (;;) {
+        if (t >= atomic_load(&acq_pushed)) return false;
+        if (atomic_compare_exchange_weak(&acq_taken, &t, t + 1)) break;
+    }
+    memcpy(acq[t % ACOPY_MAX].dst, acq[t % ACOPY_MAX].src, acq[t % ACOPY_MAX].n);
+    atomic_fetch_add(&acq_done, 1);
+    return true;
+}
+static void *acopy_main(void *a) {
+    (void)a;
+    for (;;) {
+        if (acopy_take_one()) continue;
+        pthread_mutex_lock(&acq_lock);
+        acq_sleeping++;
+        while (atomic_load(&acq_taken) >= atomic_load(&acq_pushed)) pthread_cond_wait(&acq_cond, &acq_lock);
+        acq_sleeping--;
+        pthread_mutex_unlock(&acq_lock);
+    }
+    return NULL;
+}
+static bool acopy_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VK_ASYNC_COPY");
+        on = (!e || atoi(e) != 0) && SDL_GetNumLogicalCPUCores() >= 4;
+        if (on) for (int i = 0; i < 2; i++) { pthread_t t; pthread_create(&t, NULL, acopy_main, NULL); }
+        LOG("[vk] vertex and index copies: %s\n", on ? "by two helper threads" : "on the render thread");
+    }
+    return on;
+}
+// Every copy queued so far is done (the render thread helps)
+static void acopy_drain(void) {
+    uint64_t want = atomic_load(&acq_pushed);
+    if (atomic_load(&acq_done) >= want) return;
+    PROF_T0();
+    while (acopy_take_one()) {}
+    while (atomic_load(&acq_done) < want) __builtin_ia32_pause();
+    PROF_ADD(prof_gcpy_wait_ns);
+}
+static void acopy_push(void *dst, const void *src, uint64_t n) {
+    for (uint64_t o = 0; o < n; o += ACOPY_PIECE) {
+        if (atomic_load(&acq_pushed) - atomic_load(&acq_done) >= ACOPY_MAX) acopy_drain();  // (full)
+        uint64_t i = atomic_load(&acq_pushed);
+        acq[i % ACOPY_MAX].dst = (uint8_t *)dst + o;
+        acq[i % ACOPY_MAX].src = (const uint8_t *)src + o;
+        acq[i % ACOPY_MAX].n = n - o < ACOPY_PIECE ? n - o : ACOPY_PIECE;
+        atomic_store(&acq_pushed, i + 1);
+    }
+    pthread_mutex_lock(&acq_lock);
+    if (acq_sleeping) pthread_cond_broadcast(&acq_cond);
+    pthread_mutex_unlock(&acq_lock);
+}
+
 static VkSpan transient_gpu_copy(const void *data, uint64_t size, uint64_t align) {
     VkSpan s = transient_gpu(size ? size : 16, align);
-    if (size) memcpy(s.ptr, data, size);
+    PROF_T0();
+    if (size >= ACOPY_MIN && acopy_on()) acopy_push(s.ptr, data, size);
+    else if (size) memcpy(s.ptr, data, size);
+    PROF_ADD(prof_gcpy_ns);
+    if (prof) prof_gcpy_bytes += size;
     return s;
 }
 static VkSpan guest_copy_pool(uint64_t addr, uint64_t size, bool gpu) {  // (gpu: vertex / index data, in VRAM when that ring is on)
@@ -601,6 +705,115 @@ static VkSpan guest_copy_pool(uint64_t addr, uint64_t size, bool gpu) {  // (gpu
     return s;
 }
 static VkSpan guest_copy(uint64_t addr, uint64_t size) { return guest_copy_pool(addr, size, false); }
+
+// ---- vertex data kept from one frame to the next
+// 85% of the vertex bytes copied to VRAM in Viridian City were the same as the frame before (LARECOMP_VCOPY_SAME): static meshes,
+// copied again every frame. A range copied here stays in VRAM, and a later frame reads it from there when the game has not
+// written its pages since: the OS tracks the heap's written pages (plat_written, any writer: the game's code, ours, the OS's),
+// and each check notes them in a per-page epoch, so a copy is good while all its pages are older than it. Two 128 MB areas
+// (staging + VRAM, as pool 1) filled in turn; one is reused once the GPU is done with it. The GPU's own writes (compute) are
+// never copied (gpuw: read in place). Dropped when the heap changes size (pages given back and taken again are not "written")
+// and at a reboot. LARECOMP_VK_KEEP_VERTICES=0: off (also where the platform can't track writes).
+#define KEEP_AREA (128ull << 20)
+#define KEEP_TAB 65536
+static Pool keep_pool = {.active = -1, .gpu = true};
+static uint64_t keep_gen[2], keep_seq[2];  // (an area's generation: bumped when it is emptied; the last submission reading it)
+static bool keep_retired[2];               // (its copies no longer used, waiting for the GPU to be done with them)
+static int keep_area = -1;
+static struct { uint64_t addr, len, epoch, gen, off; int area, dirty, skip; } keep[KEEP_TAB];
+static uint64_t *page_epoch;  // (the heap's pages: the epoch of the check that last found them written)
+static uint64_t keep_tick = 1, keep_heap;
+static uint64_t stat_keep_hits, stat_keep_bytes;  // (LARECOMP_VK_PROF: ranges / bytes read from a kept copy)
+static uint64_t stat_keep_new, stat_keep_volatile, stat_keep_busy;  // (... new copies kept; ranges the game rewrites, to the ring;
+                                                                     // to the ring because the other area was still in use)
+static int keep_state = -1;
+static bool keep_on(void) {
+    if (keep_state < 0) {
+        const char *e = getenv("LARECOMP_VK_KEEP_VERTICES");
+        uint64_t probe;
+        keep_state = (!e || atoi(e) != 0) && ring_gpu_enabled() && plat_written(HEAP_BASE, 4096, &probe, 1) >= 0;
+        if (keep_state) page_epoch = calloc((GUEST_HI - HEAP_BASE) >> 12, sizeof *page_epoch);
+        if (!page_epoch) keep_state = 0;
+        LOG("[vk] vertex data kept in VRAM from frame to frame: %s\n", keep_state ? "on (the heap's written pages are tracked)" : "off");
+    }
+    return keep_state;
+}
+static void keep_drop_all(void) {
+    for (int i = 0; i < 2; i++) keep_gen[i]++;
+    memset(keep, 0, sizeof keep);
+}
+// The pages of [a, a+n) written since the last look: noted with a new epoch. Returns that epoch.
+static uint64_t keep_look(uint64_t a, uint64_t n) {
+    static uint64_t pages[4096];
+    uint64_t tick = ++keep_tick;
+    int k = plat_written(a, n, pages, 4096);
+    if (k < 0 || k == 4096) {  // (not tracked, or maybe more than the list: all of it)
+        for (uint64_t pg = (a - HEAP_BASE) >> 12; pg <= (a + n - 1 - HEAP_BASE) >> 12; pg++) page_epoch[pg] = tick;
+    } else {
+        for (int i = 0; i < k; i++) page_epoch[(pages[i] - HEAP_BASE) >> 12] = tick;
+    }
+    return tick;
+}
+static bool keep_clean(uint64_t a, uint64_t n, uint64_t epoch) {
+    for (uint64_t pg = (a - HEAP_BASE) >> 12; pg <= (a + n - 1 - HEAP_BASE) >> 12; pg++)
+        if (page_epoch[pg] >= epoch) return false;
+    return true;
+}
+static void acopy_push(void *dst, const void *src, uint64_t n);
+static bool acopy_on(void);
+// A copy of [addr, addr+len) in VRAM for this submission: the kept one when still good, else a new one kept from now on.
+// False: not for this range - outside the heap, too big, off, rewritten by the game frame after frame (found written at two
+// checks in a row: to the ring, tried again every 64 checks), or no room without waiting for the GPU - copy it to the ring.
+static bool keep_copy(uint64_t addr, uint64_t len, VkSpan *out) {
+    if (!keep_on() || addr < HEAP_BASE || addr + len > GUEST_HI || len > KEEP_AREA / 8) return false;
+    if (kernel_heap_size() != keep_heap) { keep_heap = kernel_heap_size(); keep_drop_all(); }
+    uint32_t h = (uint32_t)((addr >> 4) * 0x9E3779B1u) & (KEEP_TAB - 1), at = h;
+    int found = -1;
+    for (int i = 0; i < 16; i++) {
+        uint32_t k = (h + i) & (KEEP_TAB - 1);
+        if (keep[k].addr == addr) { found = (int)k; break; }
+        if (!keep[k].addr || keep[k].gen != keep_gen[keep[k].area]) at = k;
+    }
+    if (found >= 0) at = (uint32_t)found;
+    uint64_t span = found >= 0 && keep[at].len > len ? keep[at].len : len;
+    keep_look(addr, span);
+    uint64_t pending = vk_pending_seq();
+    if (found >= 0 && keep[at].gen == keep_gen[keep[at].area] && keep[at].len >= len && keep_clean(addr, keep[at].len, keep[at].epoch)) {
+        Chunk *c = &keep_pool.c[keep[at].area];
+        keep_seq[keep[at].area] = pending;
+        keep[at].dirty = 0;
+        *out = (VkSpan){c->dev, keep[at].off, c->ptr + keep[at].off};
+        stat_keep_hits++, stat_keep_bytes += len;
+        return true;
+    }
+    int dirty = found >= 0 && keep[at].gen == keep_gen[keep[at].area] ? keep[at].dirty + 1 : 0;  // (still there, but written since its copy)
+    if (dirty >= 2 && ++keep[at].skip % 64) { keep[at].dirty = dirty; stat_keep_volatile++; return false; }
+    // a new copy, at the end of the current area (or the other one, emptied once the GPU is done with it)
+    if (keep_pool.n < 2) { new_chunk(&keep_pool, KEEP_AREA); new_chunk(&keep_pool, KEEP_AREA); keep_area = 0; }
+    Chunk *c = &keep_pool.c[keep_area];
+    uint64_t off = (c->used + 255) & ~255ull;
+    if (off + len > c->size) {
+        // Full: on to the other area, emptied, once the GPU is done with it. Its copies are dropped first (they'd be read every
+        // frame, and it would never be free), so the ranges in it go to the ring for the frames the GPU still needs, never a wait.
+        int o = keep_area ^ 1;
+        if (!keep_retired[o]) { keep_gen[o]++; keep_retired[o] = true; }
+        if (keep_seq[o] > vk_completed_seq()) { stat_keep_busy++; return false; }
+        keep_retired[o] = false;
+        keep_area = o;
+        c = &keep_pool.c[keep_area];
+        c->used = c->flushed = 0;
+        off = 0;
+    }
+    c->used = off + len;
+    keep_seq[keep_area] = pending;
+    if (len >= ACOPY_MIN && acopy_on()) acopy_push(c->ptr + off, (const void *)(uintptr_t)addr, len);
+    else memcpy(c->ptr + off, (const void *)(uintptr_t)addr, len);
+    keep[at].addr = addr, keep[at].len = len, keep[at].epoch = keep_tick + 1, keep[at].gen = keep_gen[keep_area], keep[at].off = off,
+    keep[at].area = keep_area, keep[at].dirty = dirty, keep[at].skip = 0;
+    stat_keep_new++;
+    *out = (VkSpan){c->dev, off, c->ptr + off};
+    return true;
+}
 
 // Vertex data copied to VRAM, once per start address and submission: every draw of a mesh starts at the same address and wants a
 // prefix of it (up to its largest index), so one copy serves them all. A per-vertex stream is copied whole (its bound range, up to
@@ -621,7 +834,18 @@ static VkSpan vertex_copy(uint64_t addr, uint64_t need, uint64_t bound, bool per
     }
 copy:;
     uint64_t len = per_vertex && bound <= (8ull << 20) && bound > need ? bound : need;
-    VkSpan sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
+    VkSpan sp;
+    if (!keep_copy(addr, len, &sp)) sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
+    if (prof && ENV("LARECOMP_VCOPY_SAME")) {  // (research: would a copy kept from an earlier frame still be good?)
+        static struct { uint64_t addr, len, hash; } seen[8192];
+        uint64_t hsh = len;
+        const uint64_t *w = (const uint64_t *)(uintptr_t)addr;
+        for (uint64_t i = 0; i < len / 8; i++) hsh = (hsh ^ w[i]) * 0x9E3779B97F4A7C15ull;
+        uint32_t slot = (uint32_t)((addr >> 4) * 0x9E3779B1u) & 8191;
+        if (seen[slot].addr == addr && seen[slot].len == len && seen[slot].hash == hsh) prof_vsame_bytes += len;
+        prof_vall_bytes += len;
+        seen[slot].addr = addr, seen[slot].len = len, seen[slot].hash = hsh;
+    }
     vcopy[at].addr = addr; vcopy[at].len = len; vcopy[at].seq = seq; vcopy[at].span = sp;
     return sp;
 }
@@ -880,6 +1104,31 @@ const char *renderer_stats(void) {
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | views created %llu", (unsigned long long)prof_views_created);
         prof_views_created = 0;
+        n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, " | gpu ring copies %.0f ms %.0f MB (waited %.0f ms), index scans %.0f ms",
+                 prof_gcpy_ns / 1e6, prof_gcpy_bytes / 1048576.0, prof_gcpy_wait_ns / 1e6, prof_scan_ns / 1e6);
+        if (keep_state > 0) {
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, ", kept vertex copies read %llu (%.0f MB), new %llu, rewritten %llu, no room %llu",
+                     (unsigned long long)stat_keep_hits, stat_keep_bytes / 1048576.0, (unsigned long long)stat_keep_new,
+                     (unsigned long long)stat_keep_volatile, (unsigned long long)stat_keep_busy);
+            stat_keep_hits = stat_keep_bytes = stat_keep_new = stat_keep_volatile = stat_keep_busy = 0;
+        }
+        if (prof_vall_bytes) {
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, ", vertex bytes as last copied %.1f%%", 100.0 * prof_vsame_bytes / prof_vall_bytes);
+        }
+        prof_gcpy_ns = prof_gcpy_bytes = prof_scan_ns = prof_vsame_bytes = prof_vall_bytes = prof_gcpy_wait_ns = 0;
+        // the command types that took 10 ms or more in the window (nvn.h CMD_*): type:ms/count
+        n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, " | ops:");
+        for (int i = 0; i < CMD_COUNT; i++)
+            if (prof_op_ns[i] >= 10000000) {
+                n = strlen(stats_text);
+                snprintf(stats_text + n, sizeof stats_text - n, " %d:%.0f/%llu", i, prof_op_ns[i] / 1e6, (unsigned long long)prof_op_n[i]);
+            }
+        memset(prof_op_ns, 0, sizeof prof_op_ns);
+        memset(prof_op_n, 0, sizeof prof_op_n);
         prof_tex_checks = prof_tex_samples = prof_tex_full = prof_tex_full_bytes = prof_tex_dyn = 0;
         prof_exec = prof_draw = prof_sets = prof_vtx = prof_submit = prof_pre = prof_key = prof_dyn = prof_tex = prof_up = prof_gpu = prof_ipc = 0;
     }
@@ -2570,32 +2819,47 @@ static VkDescriptorBufferInfo gmem_info(void) {
     return (VkDescriptorBufferInfo){s.buf, s.off, sizeof zero};
 }
 
+// Sorted, merged guest memory intervals; the render thread is the only user. rs_note returns whether the set changed.
+typedef struct { struct { uint64_t a, e; } r[512]; int n; } RangeSet;
+static bool rs_note(RangeSet *s, uint64_t a, uint64_t n) {
+    uint64_t e = a + (n ? n : 16);
+    int i = 0, j;
+    while (i < s->n && s->r[i].e < a) i++;
+    for (j = i; j < s->n && s->r[j].a <= e; j++) {
+        if (s->r[j].a < a) a = s->r[j].a;
+        if (s->r[j].e > e) e = s->r[j].e;
+    }
+    if (j > i) {  // merged with [i, j)
+        if (i + 1 == j && s->r[i].a == a && s->r[i].e == e) return false;  // (known)
+        s->r[i].a = a; s->r[i].e = e;
+        memmove(&s->r[i + 1], &s->r[j], (size_t)(s->n - j) * sizeof s->r[0]);
+        s->n -= j - i - 1;
+    } else {
+        if (s->n == 512) { if (s->r[s->n - 1].e < e) s->r[s->n - 1].e = e; return true; }  // (full: widen the last, stays safe)
+        memmove(&s->r[i + 1], &s->r[i], (size_t)(s->n - i) * sizeof s->r[0]);
+        s->r[i].a = a; s->r[i].e = e;
+        s->n++;
+    }
+    return true;
+}
+static bool rs_overlaps(const RangeSet *s, uint64_t a, uint64_t n) {
+    uint64_t e = a + n;
+    int lo = 0, hi = s->n;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (s->r[mid].e <= a) lo = mid + 1; else hi = mid;
+    }
+    return lo < s->n && s->r[lo].a < e;
+}
+
 // Guest memory ranges the GPU may write: the storage buffers a compute dispatch binds (the game's compute shaders produce vertex
 // data for some draws: a 16-byte stream here, a few more there). Vertex or index data inside one of them is read in place when
 // the GPU runs, as the game expects, and is never copied when the draw is recorded (the copy would hold what the GPU has not
-// written yet). Sorted, merged intervals; the render thread is the only user.
-static struct { uint64_t a, e; } gpuw[512];
-static int ngpuw;
+// written yet).
+static RangeSet gpuw;
 static void gpuw_note(uint64_t a, uint64_t n) {
-    uint64_t e = a + (n ? n : 16);
-    int i = 0, j;
-    while (i < ngpuw && gpuw[i].e < a) i++;
-    for (j = i; j < ngpuw && gpuw[j].a <= e; j++) {
-        if (gpuw[j].a < a) a = gpuw[j].a;
-        if (gpuw[j].e > e) e = gpuw[j].e;
-    }
-    if (j > i) {  // merged with [i, j)
-        if (i + 1 == j && gpuw[i].a == a && gpuw[i].e == e) return;  // (known)
-        gpuw[i].a = a; gpuw[i].e = e;
-        memmove(&gpuw[i + 1], &gpuw[j], (size_t)(ngpuw - j) * sizeof gpuw[0]);
-        ngpuw -= j - i - 1;
-    } else {
-        if (ngpuw == 512) { if (gpuw[ngpuw - 1].e < e) gpuw[ngpuw - 1].e = e; return; }  // (full: widen the last, stays safe)
-        memmove(&gpuw[i + 1], &gpuw[i], (size_t)(ngpuw - i) * sizeof gpuw[0]);
-        gpuw[i].a = a; gpuw[i].e = e;
-        ngpuw++;
-    }
-    if (ENV("LARECOMP_LOG_GPUWRITES")) LOG("[gpuw] the GPU may write %llx-%llx (%d ranges)\n", (unsigned long long)a, (unsigned long long)e, ngpuw);
+    if (rs_note(&gpuw, a, n) && ENV("LARECOMP_LOG_GPUWRITES"))
+        LOG("[gpuw] the GPU may write %llx-%llx (%d ranges)\n", (unsigned long long)a, (unsigned long long)(a + (n ? n : 16)), gpuw.n);
 }
 // A shader that stores to global memory with no storage buffer bound writes through pointers we cannot see: from then on every
 // vertex / index range is read in place, as before the VRAM ring (slower, never stale).
@@ -2609,16 +2873,23 @@ static void gpuw_stores(const ShaderInfo *si, const Range *sbufs, int n, const c
         LOG("[vk] %s %llx stores to global memory without a storage buffer: vertex and index data is read in place from now on\n", what, (unsigned long long)code);
     }
 }
-static bool gpuw_overlaps(uint64_t a, uint64_t n) {
-    uint64_t e = a + n;
-    if (gpuw_unknown) return true;
-    int lo = 0, hi = ngpuw;
-    while (lo < hi) {
-        int mid = (lo + hi) / 2;
-        if (gpuw[mid].e <= a) lo = mid + 1; else hi = mid;
+static bool gpuw_overlaps(uint64_t a, uint64_t n) { return gpuw_unknown || rs_overlaps(&gpuw, a, n); }
+
+// Guest memory ranges the GPU may read in place when it runs, not from a copy made when the draw was recorded: the storage
+// buffers bound to shaders that use global memory (the imported heap, gmem_info). A shader using global memory with none bound
+// reads through pointers we cannot see: from then on any range may be read in place.
+static RangeSet gpur;
+static bool gpur_unknown;
+static void gpur_loads(const ShaderInfo *si, const Range *sbufs, int n) {
+    if (!si || !si->uses_gmem) return;
+    bool any = false;
+    for (int i = 0; i < n; i++) if (sbufs[i].addr) { rs_note(&gpur, sbufs[i].addr, sbufs[i].size); any = true; }
+    if (!any && !gpur_unknown) {
+        gpur_unknown = true;
+        LOG("[vk] a shader uses global memory without a storage buffer: buffer copies wait for the GPU from now on\n");
     }
-    return lo < ngpuw && gpuw[lo].a < e;
 }
+static bool gpur_overlaps(uint64_t a, uint64_t n) { return gpur_unknown || rs_overlaps(&gpur, a, n); }
 
 // Vertex / index data read in place from the imported guest heap (renderer.m bind_guest does the same with
 // g_guest_buffer): no per-draw copy, no index scan for the copy size. The game fences its CPU writes as on the
@@ -2656,7 +2927,9 @@ void vk_exec_reset(void) {
     memset(prog_tab, 0, sizeof prog_tab);
     memset(pipe_tab, 0, sizeof pipe_tab);
     g_cs_n = 0;
-    ngpuw = 0;  // (guest memory is replaced)
+    gpuw.n = gpur.n = 0;  // (guest memory is replaced)
+    keep_drop_all();
+    keep_heap = 0;
     gcopy_gen++;
     if (gmem_buf) {
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -2854,6 +3127,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     gp_mark(cb, "dispatch %ux%ux%u (local %ux%ux%u)", gx, gy, gz, cp->local[0], cp->local[1], cp->local[2]);
     dl_note("dispatch %ux%ux%u cs %llx gmem %d", gx, gy, gz, (unsigned long long)st.program->stages[5].code_addr, cp->si->uses_gmem);
     gpuw_stores(cp->si, st.sbuf[5], 16, "compute shader", st.program->stages[5].code_addr);
+    gpur_loads(cp->si, st.sbuf[5], 16);
     for (int i = 0; i < 16; i++) if (st.sbuf[5][i].addr) gpuw_note(st.sbuf[5][i].addr, st.sbuf[5][i].size);  // (any storage buffer it has bound)
     nfeedback = 0;
     VkDescriptorSet ds = stage_set(&cp->p, cp->p.set_layout[0], 0, 5, cp->si, NULL, NULL, gx, gy, gz, NULL);
@@ -3566,6 +3840,8 @@ static void draw_(CmdRec *r, bool indexed) {
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     gpuw_stores(pr->vi, st.sbuf[0], 16, "vertex shader", st.program->stages[0].code_addr);
     gpuw_stores(pr->fi, st.sbuf[1], 16, "fragment shader", st.program->stages[1].code_addr);
+    gpur_loads(pr->vi, st.sbuf[0], 16);
+    gpur_loads(pr->fi, st.sbuf[1], 16);
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
     if (prof) prof_sets += SDL_GetTicksNS() - prof_t1_;
     VkDescriptorSet sets[2] = {vset, fset};
@@ -5107,6 +5383,7 @@ static void exec_list(uint64_t handle, int depth) {
         void *x = r->extra;
         if (r->op < CMD_COUNT) op_counts[r->op]++;
         if (ip_replaying && ip_skip_op(r->op)) { p += r->size; continue; }
+        uint64_t op_t0 = prof && r->op != CMD_CALL ? SDL_GetTicksNS() : 0;
         switch (r->op) {
         case CMD_END: return;
         case CMD_OBJECT: st.obj = r->x[0]; st.obj_draw = 0; { static int d; if (getenv("LARECOMP_OBJDBG") && vk_frame_counter() == 1450 && d++ < 80) LOG("[objdbg] depth %d object %llx\n", depth,(unsigned long long)r->x[0]); } break;
@@ -5246,6 +5523,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_DRAW_ARRAYS: draw(r, false); break;
         case CMD_DRAW_ELEMENTS: draw(r, true); break;
         case CMD_UPDATE_UNIFORM_BUFFER:
+            acopy_drain();  // (queued copies read guest memory as it was when their draws were recorded)
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
             guest_copy_flush();  // (cbuf copies shared within the submission are stale now)
             break;
@@ -5263,6 +5541,7 @@ static void exec_list(uint64_t handle, int depth) {
             // every counter within a presented frame (experiment).
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
             uint32_t type = (uint32_t)r->x[0];
+            acopy_drain();  // (it writes guest memory below)
             static uint32_t seen;
             if (type < 32 && !(seen & (1u << type))) { seen |= 1u << type; LOG("[nvn] ReportCounter type %u\n", type); }
             static int frozen = -1;  // 1: frozen; 2: ideal (LARECOMP_VK_COUNTER=ideal: a 33.3 ms frame, 1 ms per counter in it)
@@ -5284,13 +5563,29 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_COPY_TEXTURE_TO_TEXTURE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], r->x[6]); break; }
         case CMD_DOWNSAMPLE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], 1); break; }
         case CMD_COPY_BUFFER_TO_TEXTURE: copy_buffer_to_texture(r->x[0], x); break;
-        case CMD_COPY_TEXTURE_TO_BUFFER: copy_texture_to_buffer(x, r->x[3]); break;
-        case CMD_COPY_BUFFER_TO_BUFFER:
-            renderer_flush();
-            memmove((void *)(uintptr_t)r->x[1], (void *)(uintptr_t)r->x[0], r->x[2]);
+        case CMD_COPY_TEXTURE_TO_BUFFER: acopy_drain(); copy_texture_to_buffer(x, r->x[3]); break;
+        case CMD_COPY_BUFFER_TO_BUFFER: {
+            // The game's own GPU copy, done by the CPU in command order. Waiting for the GPU first (all the work submitted so far)
+            // is only needed when the GPU writes the source or the destination, or reads the destination in place when it runs
+            // (vertex / index data with the VRAM ring off, the storage buffers of shaders using global memory): the draws recorded
+            // before it took their constants and vertex data as copies. Viridian City: two copies a frame (112 and 32 bytes, constants),
+            // each one a wait of ~1.2 ms on the render thread. LARECOMP_VK_COPY_WAIT=1: always wait (as before).
+            uint64_t src = r->x[0], dst = r->x[1], n = r->x[2];
+            bool wait = ENV("LARECOMP_VK_COPY_WAIT") || !ring_gpu_enabled() || gpuw_overlaps(src, n) || gpuw_overlaps(dst, n) || gpur_overlaps(dst, n);
+            if (ENV("LARECOMP_LOG_B2B")) {
+                static int nlog;
+                if (nlog++ < 60) LOG("[b2b] frame %llu %llx -> %llx, %llu bytes; %s\n", (unsigned long long)vk_frame_counter(), (unsigned long long)src,
+                                     (unsigned long long)dst, (unsigned long long)n, wait ? "waits for the GPU" : "no wait");
+            }
+            if (wait) renderer_flush();
+            else acopy_drain();
+            memmove((void *)(uintptr_t)dst, (void *)(uintptr_t)src, n);
+            guest_copy_flush();  // (constant copies shared within the submission are stale now, as after UpdateUniformBuffer)
             break;
+        }
         default: break;
         }
+        if (op_t0 && r->op < CMD_COUNT) prof_op_ns[r->op] += SDL_GetTicksNS() - op_t0, prof_op_n[r->op]++;
         p += r->size;
     }
 }
