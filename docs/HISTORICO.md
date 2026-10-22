@@ -437,3 +437,15 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
 - **Visto no A/B.** Rodadas lentas (~123-135 fps contra ~185-205) aparecem nas duas variantes, ao acaso: o mesmo exe é
   bimodal nesta máquina (i5-14600KF, núcleos de desempenho e de eficiência). Hipótese a testar: as threads do jogo
   caindo em núcleos de eficiência.
+
+## Rodadas lentas nas medições: a janela composta pelo Windows, não os núcleos de eficiência (22/10/2026)
+
+- **Sintoma.** Nas medições de Viridian (sem limite de fps), o mesmo exe saía bimodal: ~185-205 fps ou ~115-140, ao acaso.
+- **Hipótese descartada.** Núcleos de eficiência do i5-14600KF: com o processo preso aos núcleos de desempenho (lógicos
+  0-11), e até a um lógico por núcleo de desempenho, as rodadas lentas continuaram; só nos de eficiência, 94-103 fps.
+- **Causa.** A janela do jogo: `nvidia-smi` e a janela em primeiro plano lidos a cada 0,5 s. Clock da GPU igual
+  (1875 MHz, P0) em todas; rodadas rápidas com a janela em foco e cobrindo a tela (carga da GPU ~50%), lentas com ela
+  atrás de outras ou menor que a tela (65-77%). O Windows compõe essas janelas (DWM) em vez de mostrá-las direto:
+  1920x1080 em foco 182-188 fps, 1280x720 em foco 151-158 (monitor de 300 Hz: não é o teto da tela).
+- **Para quem joga.** Com limite, sem efeito medido: Viridian a 60 fps com a janela composta deu 60,0 fps, p99 ~17,4 ms.
+- **Correção (medição).** `tools/perf_ab.py` traz a janela para a frente (sempre no topo, com foco) em cada rodada.
