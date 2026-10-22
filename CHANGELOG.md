@@ -1,5 +1,278 @@
 # Changelog
 
+## Unreleased
+
+Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #17 and #19): the in-house frame generation, SSAO Ultra,
+the controller layout and the menus in the game's own style.
+
+- **The F12 menu and the start screen look like the game's own menus** (its Options screen): a lime background with
+  big pale gears, slowly sliding stripes and halftone dots; each setting a white pill with dark text, the one under the
+  cursor yellow with a bobbing arrow at its left and `< >` around its value; the setting's description in a box with a
+  rainbow frame; the tabs as pills between L and R; the button prompts on a white strip at the bottom. All of it drawn
+  by the runtime from shapes and gradients (nothing of the game's). As in the game, left / right change the
+  highlighted setting at once (A still opens the list), and the on / off debug views are rows with their value. The
+  "close the game?" question and the name entry take the same look.
+- **F12 menu: A / B follow the controller layout**: with the Xbox layout, A (bottom) confirms and B (right) closes, as
+  in the game; it was the Nintendo positions whatever the layout.
+- **The menus on one grid**: the setting rows, the buttons and the description box span the same width (their left
+  and right edges lined up with the title and the tabs), their text on one column; the values in the rows' right half
+  on every page; 12 px between rows and 24 between groups, in place of separator lines. The sliders are a slim track
+  with the value after it (it was written over the knob), and left / right step them too. On the start screen the
+  toggles (fullscreen, wild battles...) and the key bindings are rows like the rest, each mod a row with an on / off
+  switch and its arrows at the right end, and the buttons pills on the same grid.
+- **Fixes the start screen opening in full screen** with `fullscreen = 1`: it took its own size, then went back to full
+  screen at once (the setting is now applied to the game's window only).
+
+- **Frame generation: grass coming into view no longer shows ahead of the ground** (Route 2, walking down out of the
+  gate after going in and out: clumps at the top left not drawn right in the in-between images). A copy of a mesh with
+  no partner in the frame before (it comes into view this frame: its closest copy there is 700 - 2500 units away, the
+  others' partners taken) kept all of frame N's constants - the camera folded into them too, while the images around it
+  have the camera part of the way from N-1: with the camera scrolling, those clumps were drawn ahead of everything else.
+  Now each of its words changes from N as the nearest copy of it that has a partner changes at that word: still where
+  both are still (where it stands, its pose), moving with the camera and the light where those are folded in.
+  `LARECOMP_INTERP_SIBLING=0` compares; the walk used for comparisons the same with and without it (flicker 0.99 % of the
+  blocks, detail and halfway placement equal). (Its words now go into the present's blend plan too: the second and third
+  in-between images had gone back to N's camera.)
+- **Frame generation: turning things keep their shape** - the tall grass rustling round a wild Pokemon (Route 2): each
+  clump has eight bones, and they swing tens of degrees a frame; blended term by term, a matrix half-way between two
+  orientations is not a rotation any more and shrinks and shears what it moves (by cos(angle / 2): 30 degrees, 3 %; 90,
+  29 %) - blades cut short and bent in the in-between images. Any three rows of a constant buffer that hold a rotation
+  with a uniform scale in both frames, turned by 3 to 150 degrees, are now blended along the arc (Rodrigues' rotation
+  about the axis between them, the scale and the translation along the line), in the present's blend plan as well.
+  `LARECOMP_INTERP_SLERP=0` compares.
+
+- **Frame generation: the interface no longer flickers in battles** (and wherever text or boxes sit over a moving
+  scene): with FSR 3.1, or with the in-between images at a reduced size, an in-between image is resolved against frame
+  N's image along the motion vectors of the scene under each pixel - the interface's too, so static text took N's text
+  shifted by the scene's motion and showed doubled in the images between two frames, clean in the real ones (FSR 3.1
+  has the interface mask): a flicker at the game's rate. The real frame's interface mask is now made with frame
+  generation on whatever the anti-aliasing, and where it says interface an in-between image takes N's processed image
+  at the same place - its interface is N's anyway (2D draws keep N's constants). Viridian Forest, a trainer's battle
+  text: in-between images against their frame 13.1 -> 0.27 (the text identical in every image). In the world the mask
+  covers the interface alone (0.4 % of the image in a battle with only the ball counter shown).
+  `LARECOMP_INTERP_UI_KEEP=0` compares.
+- **FSR 3.1: the interface stands still** (with or without frame generation; most visible at 4K): FSR 3.1 rebuilt the
+  interface as part of the jittered scene - it is drawn into the same image, without the jitter - and each frame's
+  text and boxes landed where that frame's jitter put them, a pixel off from the frame before (at 4K Quality, 1.5x),
+  shaking at the game's rate under in-between images that keep frame N's. The interface is now composited after the
+  upscale: where the mask says interface, the image FSR 3.1 was given, Catmull-Rom from the render size. 4K, battle
+  menu: the HP boxes from one real frame to the next 5.8 -> 0.10 (the opponent's 4.4 -> 0.02), as sharp as before
+  (detail 8.8 -> 9.3). `LARECOMP_FSR3_UI_COMPOSITE=0` compares.
+
+- **Frame generation: the in-between images cost ~45 % less CPU** (30 fps x 4, Pallet Town: 3.25 -> 1.77 ms a replay;
+  the draws' CPU time 756 -> 490 ms every 2 s). The replays run frame N's command lists again, and redid what does not
+  change from one image to the next:
+  - Each constant buffer's blend - kept at N, switched half-way, along the line or the curve - is decided at the
+    present's first in-between image and only evaluated at the others' t (`c0 + t (c1 + t c2)` for the words that move;
+    the rest is N's as it is). Checked against the full blend (`LARECOMP_INTERP_PLAN=2`): 1.9 million buffers, the same
+    to 1.8e-7, no buffer kept by one and blended by the other.
+  - A replay's draw binds the index and vertex buffers frame N's same draw had (its place in the frame: the lists are
+    the same) instead of scanning and copying them again - while their ring memory was not taken again (99.9 %). The
+    vertex data is then N's, not what the game may be writing for the next frame meanwhile.
+  - An in-between image drawn into the window right after it is made is no longer copied first (~66 MB of traffic at
+    4K and two full barriers an image); the per-frame tables are cleared by the slots used, not whole (2 x 256 KB a
+    frame, 512 KB a replay).
+  - Our own full-screen passes wait for what they read with a barrier for the fragment stages instead of a full one,
+    and the second barrier after most of them is gone (no difference measured where the CPU sets the pace).
+
+- **Frame generation "Auto" lowers the in-between images' resolution before the multiplier**: when the GPU can't keep
+  up, the in-between images are rendered at 75 %, then 50 % of the real frames' size on each axis (half a second late
+  each), and only then the multiplier goes down a step (a second late), at full size again - 60 fps at 240 Hz: 4x at
+  100 / 75 / 50 %, then 2x at 100 / 75 / 50 %, each step cheaper than the one before (4K: 3.65 / 2.52 / 1.63 ms an
+  in-between image, detail within 1 - 3 % of the real frames). Back up as before. Measured at 60 fps, 240 Hz: 4x 100 ->
+  75 -> 50 % -> 2x, and up again to 4x at 50 % with room (`[fg] auto: 4x, in-between images at 75 % ...`).
+- **SSAO "Ultra"** (graphics page, after High; `ssao_level = 4`): High plus contact shadows - short rays toward the
+  sun in the scene's depth, for the shadows the game's 2048² shadow map is too coarse to show: under the feet, in the
+  grass, under a lamp's cap. The sun is the shadow map's own light (its pass's light matrix, by a vote over its draws).
+  8 steps along a ray, blurred along the depth like the SSAO, faded out in the distance; 0.54 ms at 4K.
+- **Sharper textures with TAA and FSR 3.1**: the game's textures in 3D draws take a negative mip bias while a temporal
+  resolve brings the detail back - AMD's `log2(render / display) - 1` with FSR 3.1 (native: -1), -0.5 with TAA - not
+  its render targets (bloom, the depth pyramid read at explicit levels) nor the interface. Detail +2.5 % at 720p.
+- **Debanding**: the last post pass smooths the 8-bit steps of smooth gradients (sky, fog, the menus' blurred backdrop)
+  and adds a fixed one-step dither; texture detail and edges left as they were (`LARECOMP_DEBAND=0` compares).
+- FSR 3.1 is given the real frame time (16.7 ms at 60 fps; it was always 33.3); the lead before the first in-between
+  image is capped at 16 ms on both presentation paths (one had 12).
+
+- **Anti-aliasing: FSR 3.1 is its last choice** (Off, SMAA, TAA, FSR 3.1), its mode and sharpening shown under it when
+  picked; the upscaler row is gone. With the others a lower internal resolution reaches the window bilinearly (FSR 1
+  stays only as FSR 3.1's fallback when its DLL is missing; an older `upscaler = fsr1` now loads as bilinear).
+- **Frame generation research: the in-between images at a lower resolution** (`LARECOMP_FG_SCALE=<f>`, docs/DEPURACAO.md;
+  the game always renders them at full size - it was a setting for a while, left out).
+  An in-between image renders the scene again, and at 4K that was most of its cost. Its replay can draw into smaller
+  twins of the game's scaled render targets (the scene, its depth, bloom, the composite: `runtime/nvn/vulkan/textures.c`
+  `vk_tex_lo_begin`; the game's code, viewports and our passes only see smaller targets), the result rebuilt on
+  frame N's full image: with FSR 3.1 the resolve against its output that was already there, otherwise the same resolve
+  against N's own image plus RCAS. Measured at 4K (FSR 3.1 native, SSAO, GI high), GPU per in-between image: 3.65 ms
+  full, 2.52 at 75 %, 1.63 at 50 % (SMAA: 3.08 / 2.61 / 1.82). Detail within 1 - 3 % of the real frames in every mode
+  (the RCAS after it set by the size), halfway placement the same (93 % of the moving blocks), flicker 1.60 / 1.66 /
+  1.85 % of the blocks with FSR 3.1 (SMAA 1.40 / 1.62 / 1.81 %).
+  Also: an in-between image with FSR 3.1 no longer copies the depth or builds the interface mask it didn't use.
+- **Frame generation "Auto"** (first after Off): as many images per world frame as the display's refresh shows evenly
+  - 60 fps at 240 Hz: 4x, one image every refresh; 30 fps: 4x (8x would also fit, 4x is the most); 60 fps at 144 Hz,
+  where none is even: the most at or below the refresh. When the GPU can't keep up (the frames a second late in a row)
+  it goes down a step and tries again after 10 s, the wait doubling up to 2 min if it had to come down again
+  (`[fg] auto: ...` in the log). Measured at 240 Hz (`LARECOMP_PRESENT_LOG`): 60 fps in a window, 4x throughout, 97.5 %
+  of the images one refresh apart; 30 fps at 4K full screen, 4x throughout, 86 % two refreshes apart; 60 fps at 4K full
+  screen, where 4x needs ~16.8 ms of GPU a frame (a fixed 4x drops the world to 50 fps and the images go uneven), 2x.
+  With a variable-refresh display, `LARECOMP_FG_VRR=1` drops the refresh grid (docs/DEPURACAO.md).
+- **Frame generation: no more shadows of bushes and trees where there are none** (walking right from Viridian's sign,
+  starting to walk right in front of Pewter's gym, and elsewhere): an in-between image drew a shadow caster at another
+  copy's place. Each draw of the frame before is now the partner of one draw of N only, the closest to it (once per
+  present, for all its in-between images): a copy coming into view takes another's place in the order of the draws, and
+  wanted that copy's partner - which the copy, the same in both frames, matches exactly; it now keeps frame N's
+  constants. Pewter: a tree drawn three times in the shadow map, then four, the new one 900 - 1250 units from any of
+  them; the dark area where its shadow showed, 7510 samples -> 0 (`LARECOMP_INTERP_ONE_TO_ONE=0` compares); a walk there
+  otherwise the same (flicker 1.21 / 1.23 % of the blocks, 91 % of the moving blocks halfway; 1 - 2 draws a frame lose
+  their partner). Viridian's case before it: The same mesh drawn twice in the
+  shadow map (x 1420 and 2670), the second coming into its view in frame N: the only candidate in N-1 was the first,
+  1250 units away, and the jump test for a draw paired by content (half the two values and 100 units) let it through.
+  A partner found by content that moved a word by more than a quarter of the two values and 50 units is now another copy:
+  the draw keeps frame N's constants. Found with the shadow map dumped per image (`LARECOMP_INTERP_RT_DUMP`) and research
+  switches to keep draws at N by target or identity (`LARECOMP_INTERP_KEEP_RT`, `_KEEP_SIG`). Measured on that walk
+  (30 fps x 4): flicker in the images where it showed 2.5 - 2.7 -> 1.5 % of the blocks, the walk 1.37 -> 1.34 % (max
+  2.7 -> 2.1); the walk in the grass 0.78 -> 0.73 %. Also: a value alternating between two states a frame at a time (back
+  to N-2's) keeps N instead of being blended.
+- **Frame generation: the interface is never blended** - with frame generation on, every 2D draw (no depth test: the
+  interface, in the world and in menus) keeps frame N's constants in the in-between images, as the game draws it; the
+  60 fps mode's menus without frame generation still slide theirs. The per-object cut check now counts 3D draws only:
+  an interface element fading or scaling changes by large steps, and could cancel a frame's in-between images. What
+  stays at N can be looked for with a new research log (`LARECOMP_INTERP_KEPT_LOG`): walking in Pallet Town and Viridian
+  every 3D draw is paired and blended. Left as research, off: blending the vertex data the CPU writes
+  (`LARECOMP_INTERP_VTX`) - Viridian's flowers already came halfway, and it lost tall grass clumps.
+- **Frame generation: curved motion through three frames** - the in-between images followed a straight line from N-1 to
+  N, and at 30 fps x 4 the speed changed at each real frame. A value that moved in both of the last two steps, by a
+  smooth change (its acceleration at most a quarter of the steps), now follows the quadratic through N-2, N-1 and N
+  (the draws' constants, the camera, the scene block; N-1's partner in N-2 is the one its own replay paired - a third
+  frame is kept). Checked against the truth (a walk with turns at 120 fps; every 4th / 2nd frame taken as 30 / 60 and the
+  frames between predicted, the camera): at 30 x 4 mean error 0.203 -> 0.196 cm, 99th percentile 2.82 -> 2.55; at 60 x 2
+  mean 0.103 -> 0.090, never worse (with any acceleration it was worse at 60 in its worst 5 %: a step in the camera's
+  follow is not a curve). In the game: the turn at 30 x 4 flicker 3.68 -> 3.61 % of the blocks, the walk and the menus
+  the same. `LARECOMP_INTERP_CURVE=0` compares.
+
+- **Controller layout** (launcher, Game page): Nintendo (A on the right button, B on the bottom, as before) or Xbox (A
+  on the bottom, B on the right, X on the left, Y on the top - the letters printed on an Xbox controller).
+  `larecomp.ini`: `pad_layout = nintendo|xbox`. The layout sets the controller's default bindings; changing it moves
+  A / B and X / Y where they are still at the old defaults (a remap of the Controls page stays), and the button
+  prompts follow the bindings.
+- **SSAO at half its intensity on the title screen and in cutscenes** (when it is on), the setting's own in the world
+  and in battles; Pikachu and Eevee 1.0.0.
+  - The title screen (the logo with Pikachu or Eevee): before the world's first update this boot - the world's update
+    is now hooked at any frame rate, not only at 60 / 120 (`runtime/hle/fps60.c` `game_title`; logged: `[scene] the
+    world's first update`). Measured on the title screen: occlusion 17.4 -> 9.0; in the world the same (5.31 / 5.31).
+  - Cutscenes: the event scripts take the camera with the native `EvCameraStart` and give it back with `EvCameraEnd`
+    (a talk with someone doesn't); between the two (`runtime/hle/cutscene.c`, `LARECOMP_CUTSCENE_LOG=1`). The natives
+    were found by name in the image's table of script natives, in both games (Eevee `0x7000180a20` / `a70`, Pikachu
+    `0x70001809f0` / `a40`); the hooks install in both. Not yet seen in a cutscene: none was reached in the tests
+    (the new game's intro waits at an interactive step).
+  - `LARECOMP_IMAGE_DUMP=<file>` writes the main module as loaded (research: reading the image without the NSO tools).
+- **FSR 3.1 sharpening slider** under the FSR 3.1 mode (graphics page, start screen and F12): its RCAS, AMD's robust
+  contrast-adaptive sharpening, 0-100 %, 50 % by default (`fsr3_sharpness` in `larecomp.ini`); the frame generation's
+  in-between images follow it. It was the TAA sharpness slider's value; that slider (Image and sound) is now TAA's
+  alone. Measured: image detail 6.4 at 0 %, 12.3 at 100 %.
+- **SSAO: fewer thin lines along the seams of the ground at 4K** (Viridian's dirt road, the path patches): since the
+  occlusion takes the whole scene pass, the patches drawn over the terrain are in its depth, and their seams have
+  cracks and slivers one or two pixels wide; at 4K (a pixel ~0.5 units of ground) such a pixel's normal came out
+  nearly level and the ground around it occluded it. A pixel whose two neighbours of a direction (one or two away)
+  are both nearer or both farther now takes their surface. Measured on the road: the darkest line 28 -> 9 levels;
+  the scene's occlusion otherwise the same (mean 5.28 / 5.28). Left: short lines where a patch has a real sloped edge
+  10-50 units high (geometry; a larger bias would cost 40 % of the real occlusion).
+- **Frame generation in full screen at 4K: even, and no images lost**. Measured at the screen (`LARECOMP_PRESENT_LOG`,
+  4K full screen, 240 Hz, 60 fps x 2, FSR 3.1 native, SSAO, GI high): before, 1 image in 6 reached the screen in the
+  same refresh as the one before it (one of the two lost) and others came in pairs 15 / 0 ms apart; now none is lost
+  and 97 % of the intervals are 8.3 ms (the rest of the 90 % measured is the measurement's own wobble: an interval
+  off by 2 ms with its neighbour off the other way). Windowed, as before. Three causes:
+  - The images were drawn into the window at their time on the one GPU queue, behind the next frame's work (at 4K the
+    GPU runs ~10 ms behind the presents). Now each is drawn into a window image right after its replay and only
+    presented at its time, from a second queue (`LARECOMP_FG_DRAW_AT_TIME`, `LARECOMP_ONE_QUEUE` to compare).
+  - The render thread presented them between jobs, and waits for the GPU inside some of them: each present's last
+    image went ~8 ms late, beside the next present's first. Now a thread of their own presents them (the swapchain
+    under a lock; acquiring retries without holding it).
+  - Off the display's refresh, an image due near a blank went at that one or the next by microseconds. Now on the
+    refresh grid (Windows' compositor timing), a quarter of a refresh after the blank before its time.
+  The lead before the first image now goes up to 16 ms (at 4K the GPU finishes a present's images 9-12.5 ms after
+  it, `LARECOMP_FG_GPULAG`).
+- **The in-between images are as sharp as the real frames with FSR 3.1**: they were 13-15 % less detailed (no RCAS,
+  and the reprojected history sampled bilinearly), and the detail pulsed at the frame rate - smoothness lost even
+  with the motion right. Now the history is sampled Catmull-Rom and RCAS sharpens them, 0.6 stops weaker than FSR's
+  (it sharpens a history that is sharp already): within 3 % of the real frames.
+- GPU profiler marks for our own passes (`ours: GI`, `FSR 3.1`, `SSAO`, `post`, `keep copy`, `present`, `replay`):
+  at 4K a real frame costs ~7-8 ms (GI high 3.1, FSR 3.1 native 1.6-2.7, the game's scene 1.3), an in-between image
+  ~2.2 ms (the scene 1.3-1.5, the rest reprojected).
+- **Frame generation: no more flickering tall grass, and repeated objects in general**: walking past tall grass, clumps
+  went missing, squashed or shifted in the in-between images (holes showing the ground, every few frames). Found with
+  a flicker detector (the in-between image against the real frames around it, motion-compensated) and research
+  switches (`LARECOMP_INTERP_TFIX`, `_DROP`, `_FAR_LOG`, `_SIG_LOG`: docs/DEPURACAO.md). Three causes, all fixed in
+  general rather than for the grass:
+  - **A draw is paired with the previous frame by all its constant buffers together**, not by the first one. The 63
+    grass clumps share the camera buffer and differ in the next (their offsets); deciding at the first one tied all
+    63, and a clump took another's offsets (252 -> 49 units, where the wind moves them 1 or 2). Of the previous
+    frame's draws of the same program and arguments - any vertex buffer address or object, since the game reuses
+    buffers between copies - the closest that doesn't jump; its own identity first.
+  - **Occurrences are counted per draw**, not per buffer slot: one of the grass draws leaves a slot unbound, and that
+    slot's count was one behind the others for every draw after it.
+  - **A value that held still and then changes switches half-way** instead of being blended: a sprite's frame in an
+    atlas, an expression, a blink. Motion changes every frame and is still blended.
+  Walking left past the tall grass at 30 fps x 3 (FSR 3.1, SSAO, GI): the frames that flickered went from 5-9 % of
+  the image to 1 % (the level of the others: the detector's noise at edges). Walking at 2x: 97 % of the moving
+  blocks halfway. 6000 turbo frames at 4x without a fault; 4K at 4x still 60 / 240 fps.
+- **Frame generation interpolates the characters too**: the in-between images showed the player (and other walking
+  characters) almost where frame N had them, so they kept moving at the game's rate while the camera and the scenery
+  were smooth. Two checks meant to catch cuts and swapped models fired on ordinary motion:
+  - A word "jumped" when it changed by more than half its size plus 4 units, and then the whole buffer stayed at N. A
+    skeleton's translations near 0 (the player in the middle of the screen, where the camera's coordinates are small)
+    change sign every frame: a quarter of the player's skeleton jumped. Now 100 units (`LARECOMP_INTERP_JUMP_ABS`);
+    rotations never jumped and still don't.
+  - An object was not blended when more than 20 % of its changed words changed by a lot; a walking skeleton at 30 fps
+    has 20-25 %, so it was frozen at N one frame in two, and when nothing else moved the whole in-between image was
+    dropped (a 33 ms step several times a second at 2x). Now 40 % (swapped models and cuts: 50-95 %).
+  Walking at 30 fps x 2: the player's in-between image is halfway (difference to N-1 / N 7.8 / 7.9; before 10.8 /
+  3.2), 95 % of the moving 16 x 16 blocks of the image halfway, and no frame without its in-between image in 400
+  (before ~30); at the screen 603 of 622 intervals at 16.7 ms. Captures and the battle transition checked: no torn
+  models. `LARECOMP_INTERP_REJ_LOG` says which frames and objects are kept at N and why.
+- **Frame generation is evenly paced**: the images came in pairs, so 2x looked hardly smoother than without it. Each
+  present's first in-between image went out as soon as it was rendered and the real frame at half the period: 6.7 /
+  10 ms apart instead of 8.3 / 8.3. Worse, the render thread's timed wait (winpthreads) woke up to ~7 ms late, and the
+  scheduled image went out together with the next present: 15 / 2 ms. Now every image of a present is scheduled a
+  fixed lead after it (the replays' time on the GPU, learnt from whether each image was ready on time; ~4 ms), on a
+  timeline that follows the game's presents smoothly. The render thread waits in 1 ms slices of SDL's high-resolution
+  timer, and the kept images come in two sets, so a present's images can wait while the next one's are rendered.
+  Measured at the screen (`LARECOMP_PRESENT_LOG`, `VK_KHR_present_wait`, 240 Hz, 60 fps): 2x 708 of 718 intervals
+  at 8.3 ms (before: none), also when rendering at 4K with FSR 3.1, SSAO and GI. 4x: 2015 of 2520 at one refresh
+  (the others: two images in one refresh, one of them dropped). 3x is 180 images a second, which a 240 Hz screen
+  can't show evenly. `LARECOMP_VK_PRESENT=fifo` gives an even 4x (1418 of 1438) at ~58 fps of game.
+- **Frame generation on any GPU: Off / 2x / 3x / 4x** (F12 menu, `frame_gen = 0 / 2 / 3 / 4`; replaces FSR 3.1's,
+  which needed FSR 3.1 anti-aliasing and had only 2x on Vulkan): k - 1 in-between images per frame, drawn by running
+  the frame's draws again with their constants (camera, objects, bones) blended between the last frame's and this
+  one's - the 60 fps mode's in-between image for menus, generalised. The multiplier is of the world's rate (60 fps x 4 =
+  240): a menu or a battle at the game's 30 gets twice the images, and the window keeps the same rate. The in-between
+  images are rendered and kept at once, the first shown at once and the others on schedule by the render thread between
+  the next frame's jobs, so the game is not held up (with the images presented from the game thread, 60 x 4 slowed it to
+  ~33 fps); the game then runs one present ahead instead of two (with two it rewrote the command lists being replayed).
+  Each draw is paired with the previous frame's occurrence with the closest constants, not the one at its place in the
+  draw order - that order shifts when a copy of a repeated mesh (flower bushes, grass) is culled, and the in-between
+  images mixed bushes with their neighbours (the defect that took interpolation out of the world before). Measured at
+  real speed (Pallet Town, RTX 5070 Ti, 240 Hz): 30 fps x 2 / 3 / 4 = 60 / 90 / 120 images a second, 60 x 4 = 240 (also
+  with FSR 3.1, SSAO and GI high) and 240 in the menus, the game at its own speed; ~2.6-3 ms per in-between image;
+  9000 turbo frames (26000 replays) without a fault. Not yet: the interface and particles stay at the game's rate; one
+  frame of latency more. `LARECOMP_INTERP_MULT=<k>` fixes k (research).
+  - **The in-between images are side images**: they read N's temporal state and leave it as it was, and the real
+    frames chain N-1, N, N+1 by their own count. Counted as frames of their own (rendered after N, but before it in
+    time) they ran every history back and forth: the GI's and SSAO's accumulation shimmered in blotches, TAA and FSR
+    3.1 got the past after the future, and the jitter sequence skipped phases (half of FSR's eight at 2x). Now: their
+    SSAO / GI are N's, moved by their motion vectors (relative to N) instead of computed again; TAA reads N's history and
+    writes apart; with FSR 3.1 they are resolved against N's FSR output like TAA (FSR's history is the real frames'
+    alone); the camera and the per-object vectors are relative to N; the jitter has a sequence for each. Static camera,
+    4K, FSR 3.1: the step real -> in-between -> real went from 0.49 / 0.20 (out and back) to 0.35 / 0.35, as real ->
+    real (0.31).
+  - **k from the game's state, not the measured period**: a frame the GPU could not finish in time came later and got
+    more images (4 instead of 2 in the world at 60), and was slower still - at 4K the game sank to ~30 fps with 2x.
+    Now k = frame_gen x the world's rate / the frame's rate as the 60 fps mode means it (fps60_period_ns).
+  - The kept images are copied raw only when nothing processed them (a 4K copy per image saved).
+  - 4K, RTX 5070 Ti, the world at 60 with SSAO medium and GI high: FSR 3.1 native 2x 60 fps / 120 images (before: ~30
+    / 120), native 3x ~48 / ~145, Quality 3x 60 / 180, Quality 4x ~55 / ~220.
+- **FSR 3.1 frame generation and AMD's swapchain removed**: the swapchain is the driver's again, the device has no extra
+  queues, and `ffx_swapchain` is gone (FSR 3.1 upscaling stays).
+
 ## 0.5.0 (2026-10-19)
 
 A good part of this release is Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #15 and #16): 120 fps,

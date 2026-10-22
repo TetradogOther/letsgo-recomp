@@ -384,3 +384,16 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
 - **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
 - **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
   ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).
+
+## Launcher abrindo em tela cheia (21/10/2026, testes dos PRs #17 e #19)
+
+- **Sintoma.** Com `fullscreen = 1` no `larecomp.ini` (a pasta de teste do Pikachu), o launcher abria ocupando a tela
+  inteira, e não na janela estreita e mais alta que larga que o Eevee mostrava. Captura do launcher: 1920x1080 em vez
+  de 762x887.
+- **Causa.** O launcher chama `menu_apply_window_requests` a cada quadro (para a entrada de texto), e essa função, na
+  primeira chamada, aplicava `SDL_SetWindowFullscreen(g_settings.fullscreen)`: logo depois de `window_as_launcher`
+  sair da tela cheia e dar o tamanho do launcher, ela voltava para a tela cheia. Herança do fork, de antes de
+  `ui_window_init` e `window_as_game` aplicarem a opção. Já existia na 0.5.0, não veio dos PRs.
+- **Correção.** `menu_apply_window_requests` só aplica a tela cheia pedida por F11 / Alt+Enter. Pikachu com
+  `fullscreen = 1`: launcher em 762x887, e o jogo em 1920x1080 depois de Jogar (`LARECOMP_LAUNCHER_AUTOPLAY` +
+  `LARECOMP_WINDOW_SHOT`).

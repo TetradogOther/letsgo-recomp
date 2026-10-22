@@ -26,7 +26,7 @@ area at 2x. Not Switch captures.* ▶ [Showcase video](https://youtu.be/mGk-wBu1
 - Native code, up to **4K** internal resolution, any window size, fullscreen
 - Anti-aliasing **SMAA**, **TAA** or **AMD FSR 3.1** (also upscales); **FSR 1** for a lower resolution
 - **Ambient occlusion (SSAO)** and **indirect light (GI)**, smooth shadows, 16x anisotropic filtering
-- The game's **30 fps**, or **60 / 120 fps** in the overworld (experimental), plus **FSR 3.1 frame generation**
+- The game's **30 fps**, or **60 / 120 fps** in the overworld (experimental), plus **frame generation** (2x / 3x / 4x, any GPU)
 - **2x interface** images and sharper text
 - **Mods**: fan translations and other LayeredFS mods, several at once
 - Keyboard and mouse (aim Poké Balls, touch screen) and any controller; every key rebindable
@@ -100,7 +100,8 @@ release: [CHANGELOG.md](CHANGELOG.md).
 
 - **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by **Peiikai**: the recompiler and runtime this port is built on
 - **Iván Serrano ([@Vancete](https://github.com/Vancete))**: the F12 menu, TAA and FSR 3.1, the 2x interface and sharper
-  text, frame generation, 120 fps and the walking fix, skipping the controller screen
+  text, frame generation (FSR 3.1's, then the in-house 2x / 3x / 4x), 120 fps and the walking fix, skipping the
+  controller screen, the menus' look, the Xbox controller layout, SSAO Ultra
 - **Pokémon Switch Brasil**: the Brazilian Portuguese fan translation used in testing
 - Libraries: SDL 3, FFmpeg (LGPL), Dear ImGui, Vulkan Memory Allocator, shaderc, SMAA, AMD FidelityFX (FSR 1, FSR 3.1),
   bcdec, stb, waifu2x-ncnn-vulkan, the Baloo 2 font (OFL), Capstone, Unicorn, PyInstaller, Zig
