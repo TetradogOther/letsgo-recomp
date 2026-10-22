@@ -384,3 +384,23 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
 - **Ferramenta.** `LARECOMP_SET_AT` aplica opções no meio da partida, como o F12 (docs/DEPURACAO.md).
 - **Ainda aberto.** Trocar o antisserrilhado para TAA com o jogo rodando deixa 1-2 quadros pretos: os shaders da cena
   ganham variantes com jitter e os desenhos são pulados enquanto compilam (já acontecia na 0.4.x).
+
+## Viridian City lenta: cópias de buffer esperando a GPU (22/10/2026, issue #20)
+
+- **Sintoma.** Queda de FPS em Viridian City (issue #20, RX 7600 + i5-10400F). Medido aqui (0.5.0, i5-14600KF + RTX 3080,
+  1080p, sem limite, `LARECOMP_VK_PROF`): Viridian ~110-155 fps, a thread de renderização ocupada 89-93% do tempo
+  (~8 ms por quadro) e a GPU só ~1,5-3 ms. A cena mais pesada para a CPU do backend, mais que Pewter e a Floresta.
+- **Diagnóstico.** O perfil ganhou o tempo de CPU por tipo de comando (`ops:` na linha do `LARECOMP_VK_PROF`). Quase um
+  terço da thread era o comando 43, `CopyBufferToBuffer`: 2 por quadro, ~1,2 ms cada. `LARECOMP_LOG_B2B`: cópias de 112 e
+  32 bytes (constantes), nenhuma em memória que a GPU escreve.
+- **Causa.** A cópia chamava `renderer_flush()` antes do `memmove`: enviava o trabalho e esperava a GPU terminar tudo. Só
+  é preciso quando a GPU escreve a origem ou o destino, ou lê o destino direto da memória; os draws gravados antes
+  levaram cópias das constantes e dos vértices.
+- **Correção.** Espera só nesses casos: intervalos que a GPU escreve (`gpuw`), os storage buffers de shaders com memória
+  global (novo `gpur`, lido no lugar) e vértices lidos no lugar (anel de VRAM desligado). Depois do `memmove`,
+  `guest_copy_flush` (como no `UpdateUniformBuffer`). `LARECOMP_VK_COPY_WAIT=1` volta ao antigo. Viridian, A/B
+  intercalado no mesmo exe (4 + 4 rodadas por cena): Eevee parado 143 -> 180 fps, andando 146 -> 151, Pikachu andando
+  122 -> 143 (razão 1,175, IC 95% 1,08-1,23); o novo ganhou nas 12 duplas. Thread de renderização ~8,3 -> ~5,6 ms por
+  quadro. Bateria dos dois jogos, novo contra antigo: 0 crash, piscadas na faixa de sempre.
+- **Ainda aberto.** O mesmo exe varia muito entre rodadas nesta máquina (120-175 fps; núcleos de eficiência do 14600KF,
+  não confirmado). A cópia de vértices (~12-19 MB por quadro em Viridian) é o próximo custo da thread.

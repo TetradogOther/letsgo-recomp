@@ -45,9 +45,10 @@ static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU 
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
+static uint64_t prof_op_ns[CMD_COUNT], prof_op_n[CMD_COUNT];  // (LARECOMP_VK_PROF: the CPU time of each command type, nested lists apart)
 static uint64_t stat_vtx_copied, stat_vtx_direct;  // vertex / index ranges of the draws: copied to VRAM / read in place
 bool g_debug_frame;
-static char stats_text[1024];
+static char stats_text[2048];
 void vk_collect_dead(void);
 
 // ================================================================== submissions
@@ -826,6 +827,16 @@ const char *renderer_stats(void) {
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | views created %llu", (unsigned long long)prof_views_created);
         prof_views_created = 0;
+        // the command types that took 10 ms or more in the window (nvn.h CMD_*): type:ms/count
+        n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, " | ops:");
+        for (int i = 0; i < CMD_COUNT; i++)
+            if (prof_op_ns[i] >= 10000000) {
+                n = strlen(stats_text);
+                snprintf(stats_text + n, sizeof stats_text - n, " %d:%.0f/%llu", i, prof_op_ns[i] / 1e6, (unsigned long long)prof_op_n[i]);
+            }
+        memset(prof_op_ns, 0, sizeof prof_op_ns);
+        memset(prof_op_n, 0, sizeof prof_op_n);
         prof_tex_checks = prof_tex_samples = prof_tex_full = prof_tex_full_bytes = prof_tex_dyn = 0;
         prof_exec = prof_draw = prof_sets = prof_vtx = prof_submit = prof_pre = prof_key = prof_dyn = prof_tex = prof_up = prof_gpu = 0;
     }
@@ -2474,32 +2485,47 @@ static VkDescriptorBufferInfo gmem_info(void) {
     return (VkDescriptorBufferInfo){s.buf, s.off, sizeof zero};
 }
 
+// Sorted, merged guest memory intervals; the render thread is the only user. rs_note returns whether the set changed.
+typedef struct { struct { uint64_t a, e; } r[512]; int n; } RangeSet;
+static bool rs_note(RangeSet *s, uint64_t a, uint64_t n) {
+    uint64_t e = a + (n ? n : 16);
+    int i = 0, j;
+    while (i < s->n && s->r[i].e < a) i++;
+    for (j = i; j < s->n && s->r[j].a <= e; j++) {
+        if (s->r[j].a < a) a = s->r[j].a;
+        if (s->r[j].e > e) e = s->r[j].e;
+    }
+    if (j > i) {  // merged with [i, j)
+        if (i + 1 == j && s->r[i].a == a && s->r[i].e == e) return false;  // (known)
+        s->r[i].a = a; s->r[i].e = e;
+        memmove(&s->r[i + 1], &s->r[j], (size_t)(s->n - j) * sizeof s->r[0]);
+        s->n -= j - i - 1;
+    } else {
+        if (s->n == 512) { if (s->r[s->n - 1].e < e) s->r[s->n - 1].e = e; return true; }  // (full: widen the last, stays safe)
+        memmove(&s->r[i + 1], &s->r[i], (size_t)(s->n - i) * sizeof s->r[0]);
+        s->r[i].a = a; s->r[i].e = e;
+        s->n++;
+    }
+    return true;
+}
+static bool rs_overlaps(const RangeSet *s, uint64_t a, uint64_t n) {
+    uint64_t e = a + n;
+    int lo = 0, hi = s->n;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (s->r[mid].e <= a) lo = mid + 1; else hi = mid;
+    }
+    return lo < s->n && s->r[lo].a < e;
+}
+
 // Guest memory ranges the GPU may write: the storage buffers a compute dispatch binds (the game's compute shaders produce vertex
 // data for some draws: a 16-byte stream here, a few more there). Vertex or index data inside one of them is read in place when
 // the GPU runs, as the game expects, and is never copied when the draw is recorded (the copy would hold what the GPU has not
-// written yet). Sorted, merged intervals; the render thread is the only user.
-static struct { uint64_t a, e; } gpuw[512];
-static int ngpuw;
+// written yet).
+static RangeSet gpuw;
 static void gpuw_note(uint64_t a, uint64_t n) {
-    uint64_t e = a + (n ? n : 16);
-    int i = 0, j;
-    while (i < ngpuw && gpuw[i].e < a) i++;
-    for (j = i; j < ngpuw && gpuw[j].a <= e; j++) {
-        if (gpuw[j].a < a) a = gpuw[j].a;
-        if (gpuw[j].e > e) e = gpuw[j].e;
-    }
-    if (j > i) {  // merged with [i, j)
-        if (i + 1 == j && gpuw[i].a == a && gpuw[i].e == e) return;  // (known)
-        gpuw[i].a = a; gpuw[i].e = e;
-        memmove(&gpuw[i + 1], &gpuw[j], (size_t)(ngpuw - j) * sizeof gpuw[0]);
-        ngpuw -= j - i - 1;
-    } else {
-        if (ngpuw == 512) { if (gpuw[ngpuw - 1].e < e) gpuw[ngpuw - 1].e = e; return; }  // (full: widen the last, stays safe)
-        memmove(&gpuw[i + 1], &gpuw[i], (size_t)(ngpuw - i) * sizeof gpuw[0]);
-        gpuw[i].a = a; gpuw[i].e = e;
-        ngpuw++;
-    }
-    if (ENV("LARECOMP_LOG_GPUWRITES")) LOG("[gpuw] the GPU may write %llx-%llx (%d ranges)\n", (unsigned long long)a, (unsigned long long)e, ngpuw);
+    if (rs_note(&gpuw, a, n) && ENV("LARECOMP_LOG_GPUWRITES"))
+        LOG("[gpuw] the GPU may write %llx-%llx (%d ranges)\n", (unsigned long long)a, (unsigned long long)(a + (n ? n : 16)), gpuw.n);
 }
 // A shader that stores to global memory with no storage buffer bound writes through pointers we cannot see: from then on every
 // vertex / index range is read in place, as before the VRAM ring (slower, never stale).
@@ -2513,16 +2539,23 @@ static void gpuw_stores(const ShaderInfo *si, const Range *sbufs, int n, const c
         LOG("[vk] %s %llx stores to global memory without a storage buffer: vertex and index data is read in place from now on\n", what, (unsigned long long)code);
     }
 }
-static bool gpuw_overlaps(uint64_t a, uint64_t n) {
-    uint64_t e = a + n;
-    if (gpuw_unknown) return true;
-    int lo = 0, hi = ngpuw;
-    while (lo < hi) {
-        int mid = (lo + hi) / 2;
-        if (gpuw[mid].e <= a) lo = mid + 1; else hi = mid;
+static bool gpuw_overlaps(uint64_t a, uint64_t n) { return gpuw_unknown || rs_overlaps(&gpuw, a, n); }
+
+// Guest memory ranges the GPU may read in place when it runs, not from a copy made when the draw was recorded: the storage
+// buffers bound to shaders that use global memory (the imported heap, gmem_info). A shader using global memory with none bound
+// reads through pointers we cannot see: from then on any range may be read in place.
+static RangeSet gpur;
+static bool gpur_unknown;
+static void gpur_loads(const ShaderInfo *si, const Range *sbufs, int n) {
+    if (!si || !si->uses_gmem) return;
+    bool any = false;
+    for (int i = 0; i < n; i++) if (sbufs[i].addr) { rs_note(&gpur, sbufs[i].addr, sbufs[i].size); any = true; }
+    if (!any && !gpur_unknown) {
+        gpur_unknown = true;
+        LOG("[vk] a shader uses global memory without a storage buffer: buffer copies wait for the GPU from now on\n");
     }
-    return lo < ngpuw && gpuw[lo].a < e;
 }
+static bool gpur_overlaps(uint64_t a, uint64_t n) { return gpur_unknown || rs_overlaps(&gpur, a, n); }
 
 // Vertex / index data read in place from the imported guest heap (renderer.m bind_guest does the same with
 // g_guest_buffer): no per-draw copy, no index scan for the copy size. The game fences its CPU writes as on the
@@ -2560,7 +2593,7 @@ void vk_exec_reset(void) {
     memset(prog_tab, 0, sizeof prog_tab);
     memset(pipe_tab, 0, sizeof pipe_tab);
     g_cs_n = 0;
-    ngpuw = 0;  // (guest memory is replaced)
+    gpuw.n = gpur.n = 0;  // (guest memory is replaced)
     gcopy_gen++;
     if (gmem_buf) {
         vkDestroyBuffer(g_vk.dev, gmem_buf, NULL);
@@ -2748,6 +2781,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     gp_mark(cb, "dispatch %ux%ux%u (local %ux%ux%u)", gx, gy, gz, cp->local[0], cp->local[1], cp->local[2]);
     dl_note("dispatch %ux%ux%u cs %llx gmem %d", gx, gy, gz, (unsigned long long)st.program->stages[5].code_addr, cp->si->uses_gmem);
     gpuw_stores(cp->si, st.sbuf[5], 16, "compute shader", st.program->stages[5].code_addr);
+    gpur_loads(cp->si, st.sbuf[5], 16);
     for (int i = 0; i < 16; i++) if (st.sbuf[5][i].addr) gpuw_note(st.sbuf[5][i].addr, st.sbuf[5][i].size);  // (any storage buffer it has bound)
     nfeedback = 0;
     VkDescriptorSet ds = stage_set(&cp->p, cp->p.set_layout[0], 0, 5, cp->si, NULL, NULL, gx, gy, gz, NULL);
@@ -3340,6 +3374,8 @@ static void draw_(CmdRec *r, bool indexed) {
     uint64_t prof_t1_ = prof ? SDL_GetTicksNS() : 0;
     gpuw_stores(pr->vi, st.sbuf[0], 16, "vertex shader", st.program->stages[0].code_addr);
     gpuw_stores(pr->fi, st.sbuf[1], 16, "fragment shader", st.program->stages[1].code_addr);
+    gpur_loads(pr->vi, st.sbuf[0], 16);
+    gpur_loads(pr->fi, st.sbuf[1], 16);
     VkDescriptorSet fset = stage_set(pr, pr->set_layout[1], 1, 1, pr->fi, rs0, tint, 0, 0, 0, fii);
     if (prof) prof_sets += SDL_GetTicksNS() - prof_t1_;
     VkDescriptorSet sets[2] = {vset, fset};
@@ -4700,6 +4736,7 @@ static void exec_list(uint64_t handle, int depth) {
         void *x = r->extra;
         if (r->op < CMD_COUNT) op_counts[r->op]++;
         if (ip_replaying && ip_skip_op(r->op)) { p += r->size; continue; }
+        uint64_t op_t0 = prof && r->op != CMD_CALL ? SDL_GetTicksNS() : 0;
         switch (r->op) {
         case CMD_END: return;
         case CMD_OBJECT: st.obj = r->x[0]; st.obj_draw = 0; { static int d; if (getenv("LARECOMP_OBJDBG") && vk_frame_counter() == 1450 && d++ < 80) LOG("[objdbg] depth %d object %llx\n", depth,(unsigned long long)r->x[0]); } break;
@@ -4878,12 +4915,27 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_DOWNSAMPLE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], 1); break; }
         case CMD_COPY_BUFFER_TO_TEXTURE: copy_buffer_to_texture(r->x[0], x); break;
         case CMD_COPY_TEXTURE_TO_BUFFER: copy_texture_to_buffer(x, r->x[3]); break;
-        case CMD_COPY_BUFFER_TO_BUFFER:
-            renderer_flush();
-            memmove((void *)(uintptr_t)r->x[1], (void *)(uintptr_t)r->x[0], r->x[2]);
+        case CMD_COPY_BUFFER_TO_BUFFER: {
+            // The game's own GPU copy, done by the CPU in command order. Waiting for the GPU first (all the work submitted so far)
+            // is only needed when the GPU writes the source or the destination, or reads the destination in place when it runs
+            // (vertex / index data with the VRAM ring off, the storage buffers of shaders using global memory): the draws recorded
+            // before it took their constants and vertex data as copies. Viridian City: two copies a frame (112 and 32 bytes, constants),
+            // each one a wait of ~1.2 ms on the render thread. LARECOMP_VK_COPY_WAIT=1: always wait (as before).
+            uint64_t src = r->x[0], dst = r->x[1], n = r->x[2];
+            bool wait = ENV("LARECOMP_VK_COPY_WAIT") || !ring_gpu_enabled() || gpuw_overlaps(src, n) || gpuw_overlaps(dst, n) || gpur_overlaps(dst, n);
+            if (ENV("LARECOMP_LOG_B2B")) {
+                static int nlog;
+                if (nlog++ < 60) LOG("[b2b] frame %llu %llx -> %llx, %llu bytes; %s\n", (unsigned long long)vk_frame_counter(), (unsigned long long)src,
+                                     (unsigned long long)dst, (unsigned long long)n, wait ? "waits for the GPU" : "no wait");
+            }
+            if (wait) renderer_flush();
+            memmove((void *)(uintptr_t)dst, (void *)(uintptr_t)src, n);
+            guest_copy_flush();  // (constant copies shared within the submission are stale now, as after UpdateUniformBuffer)
             break;
+        }
         default: break;
         }
+        if (op_t0 && r->op < CMD_COUNT) prof_op_ns[r->op] += SDL_GetTicksNS() - op_t0, prof_op_n[r->op]++;
         p += r->size;
     }
 }
