@@ -404,3 +404,22 @@ código em `runtime/hle/wildbattle.c`; opção "Batalhas selvagens (experimental
   quadro. Bateria dos dois jogos, novo contra antigo: 0 crash, piscadas na faixa de sempre.
 - **Ainda aberto.** O mesmo exe varia muito entre rodadas nesta máquina (120-175 fps; núcleos de eficiência do 14600KF,
   não confirmado). A cópia de vértices (~12-19 MB por quadro em Viridian) é o próximo custo da thread.
+
+## Viridian City: as cópias de vértices saem da thread de renderização (22/10/2026, issue #20)
+
+- **Diagnóstico.** Depois da correção acima, a maior fatia da thread de renderização em Viridian eram as cópias de
+  vértices e índices para o anel de VRAM: ~12 MB e ~1,1 ms por quadro (~10,6 GB/s); a varredura dos índices, ~0,05 ms.
+  `LARECOMP_VCOPY_SAME`: 85% dos bytes copiados iguais à cópia anterior, mas conferir com um hash custou o mesmo que
+  copiar; reaproveitar entre quadros pediria o rastreio de escrita do Windows na reserva do jogo (fica para depois).
+- **Correção.** A thread de renderização reserva o espaço no anel e grava o draw; duas threads auxiliares fazem as
+  cópias de 32 KB ou mais (em pedaços de 256 KB; a thread de renderização ajuda quando espera). Tudo termina antes do
+  envio que lê as cópias e antes de a própria thread escrever na memória do jogo no meio da lista (`UpdateUniformBuffer`,
+  cópia de buffer, cópia de textura para buffer, contadores). O jogo só reescreve vértices depois do fence do quadro,
+  que vem depois do envio. `LARECOMP_VK_ASYNC_COPY=0` volta ao antigo.
+- **Medido.** Viridian, CPU da thread de renderização ~5,6 -> ~3,6 ms por quadro (as auxiliares terminam antes do envio:
+  0 ms de espera). A/B intercalado, mesmo exe, 4 + 4 rodadas: Eevee parado 188 -> 196 fps (razão 1,044, IC 95%
+  1,027-1,057), andando 172 -> 181 (1,054; 1,037-1,063), Pikachu andando 171 -> 181 (1,061; 1,020-1,070); o novo ganhou
+  nas 12 duplas, p99 menor. A thread de renderização deixou de ser o gargalo em Viridian: o resto é das threads do jogo.
+  Bateria dos dois jogos, 2 repetições, com e sem: 0 crash, piscadas iguais.
+- **Nota de teste.** No Git Bash, pôr `/c/msys64/usr/bin` na frente do `PATH` faz scripts rodarem no bash do MSYS2, e as
+  variáveis exportadas não chegam (`TAG`, `REPS` da bateria, `LARECOMP_*`): não trocar o `PATH` antes de chamar scripts.

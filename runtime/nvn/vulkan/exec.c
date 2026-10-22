@@ -45,7 +45,10 @@ static _Atomic uint64_t stat_translate_ns, stat_spirv_ns, stat_pipe_ns;  // CPU 
 static uint64_t stat_shader_wait_ns;  // draws waiting for their program / pipeline (wait_built)
 static _Atomic int new_pipes;  // pipelines created since the pipeline cache was last saved
 static uint64_t op_counts[CMD_COUNT];
-static uint64_t prof_op_ns[CMD_COUNT], prof_op_n[CMD_COUNT];  // (LARECOMP_VK_PROF: the CPU time of each command type, nested lists apart)
+static uint64_t prof_op_ns[CMD_COUNT], prof_op_n[CMD_COUNT];
+// (LARECOMP_VK_PROF: vertex / index data copied to the GPU ring - time and bytes - and the index scans; with LARECOMP_VCOPY_SAME=1
+// also how many of the vertex bytes copied were the same as the last copy of that range, a hash per range)
+static uint64_t prof_gcpy_ns, prof_gcpy_bytes, prof_scan_ns, prof_vsame_bytes, prof_vall_bytes, prof_gcpy_wait_ns;  // (LARECOMP_VK_PROF: the CPU time of each command type, nested lists apart)
 static uint64_t stat_vtx_copied, stat_vtx_direct;  // vertex / index ranges of the draws: copied to VRAM / read in place
 bool g_debug_frame;
 static char stats_text[2048];
@@ -251,10 +254,12 @@ void vk_gpuprof_report(void) {
 }
 
 static void ring_flush_gpu(void);
+static void acopy_drain(void);
 // Submit the pending work (if any). wait/signal: binary semaphores for presentation (may be null).
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra) {
     (void)extra;
     vk_end_pass();
+    acopy_drain();  // (the vertex / index copies this submission reads)
     ring_flush_gpu();
     Sub *s = sub();
     if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
@@ -381,7 +386,7 @@ __attribute__((target("avx2"))) static uint32_t scan_max32_avx2(const uint32_t *
     for (; i < n; i++) if (q[i] != restart && q[i] > m) m = q[i];
     return m;
 }
-static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
+static uint32_t scan_max_index_(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
     static int avx2 = -1;
     if (avx2 < 0) avx2 = __builtin_cpu_supports("avx2");
     uint32_t m = 0;
@@ -394,6 +399,12 @@ static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32
         const uint32_t *q = src;
         for (uint32_t i = 0; i < n; i++) if (q[i] > m && q[i] != restart) m = q[i];
     }
+    return m;
+}
+static uint32_t scan_max_index(const void *src, uint32_t isz, uint32_t n, uint32_t restart) {
+    PROF_T0();
+    uint32_t m = scan_max_index_(src, isz, n, restart);
+    PROF_ADD(prof_scan_ns);
     return m;
 }
 
@@ -548,9 +559,85 @@ static VkSpan copy_dedupe(int slot, const void *data, uint64_t size, uint64_t al
 static struct { uint64_t addr, size, seq; VkSpan span; bool gpu; } gcopy[GCOPY_TAB];
 static uint64_t gcopy_gen;  // bumped to drop every shared copy (guest memory written mid-list)
 static void guest_copy_flush(void) { gcopy_gen++; }
+// ---- vertex / index copies off the render thread
+// The draws' vertex and index data copied to the GPU ring (~12 MB a frame in Viridian City, ~1.1 ms: the render thread's
+// largest single cost after the buffer-copy waits) is filled in by two helper threads: the render thread reserves the ring
+// space and records the draw at once, a helper copies, and every copy is done before the submission that reads it
+// (vk_submit_extra) and before the render thread itself writes guest memory (acopy_drain in exec_list). Until the
+// submission the game leaves that memory alone: it rewrites vertex data only after the frame's fence, which follows the
+// submission. Copies under 32 KB stay in place; big ones go in 256 KB pieces. The render thread takes pieces too while it
+// waits. LARECOMP_VK_ASYNC_COPY=0 (or fewer than 4 logical processors): all in place, as before.
+#define ACOPY_MAX 4096
+#define ACOPY_MIN (32u << 10)
+#define ACOPY_PIECE (256u << 10)
+static struct { void *dst; const void *src; uint64_t n; } acq[ACOPY_MAX];
+static _Atomic uint64_t acq_pushed, acq_taken, acq_done;  // (counters only grow: a job is acq[i % ACOPY_MAX])
+static pthread_mutex_t acq_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t acq_cond = PTHREAD_COND_INITIALIZER;
+static int acq_sleeping;
+
+static bool acopy_take_one(void) {
+    uint64_t t = atomic_load(&acq_taken);
+    for (;;) {
+        if (t >= atomic_load(&acq_pushed)) return false;
+        if (atomic_compare_exchange_weak(&acq_taken, &t, t + 1)) break;
+    }
+    memcpy(acq[t % ACOPY_MAX].dst, acq[t % ACOPY_MAX].src, acq[t % ACOPY_MAX].n);
+    atomic_fetch_add(&acq_done, 1);
+    return true;
+}
+static void *acopy_main(void *a) {
+    (void)a;
+    for (;;) {
+        if (acopy_take_one()) continue;
+        pthread_mutex_lock(&acq_lock);
+        acq_sleeping++;
+        while (atomic_load(&acq_taken) >= atomic_load(&acq_pushed)) pthread_cond_wait(&acq_cond, &acq_lock);
+        acq_sleeping--;
+        pthread_mutex_unlock(&acq_lock);
+    }
+    return NULL;
+}
+static bool acopy_on(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("LARECOMP_VK_ASYNC_COPY");
+        on = (!e || atoi(e) != 0) && SDL_GetNumLogicalCPUCores() >= 4;
+        if (on) for (int i = 0; i < 2; i++) { pthread_t t; pthread_create(&t, NULL, acopy_main, NULL); }
+        LOG("[vk] vertex and index copies: %s\n", on ? "by two helper threads" : "on the render thread");
+    }
+    return on;
+}
+// Every copy queued so far is done (the render thread helps)
+static void acopy_drain(void) {
+    uint64_t want = atomic_load(&acq_pushed);
+    if (atomic_load(&acq_done) >= want) return;
+    PROF_T0();
+    while (acopy_take_one()) {}
+    while (atomic_load(&acq_done) < want) __builtin_ia32_pause();
+    PROF_ADD(prof_gcpy_wait_ns);
+}
+static void acopy_push(void *dst, const void *src, uint64_t n) {
+    for (uint64_t o = 0; o < n; o += ACOPY_PIECE) {
+        if (atomic_load(&acq_pushed) - atomic_load(&acq_done) >= ACOPY_MAX) acopy_drain();  // (full)
+        uint64_t i = atomic_load(&acq_pushed);
+        acq[i % ACOPY_MAX].dst = (uint8_t *)dst + o;
+        acq[i % ACOPY_MAX].src = (const uint8_t *)src + o;
+        acq[i % ACOPY_MAX].n = n - o < ACOPY_PIECE ? n - o : ACOPY_PIECE;
+        atomic_store(&acq_pushed, i + 1);
+    }
+    pthread_mutex_lock(&acq_lock);
+    if (acq_sleeping) pthread_cond_broadcast(&acq_cond);
+    pthread_mutex_unlock(&acq_lock);
+}
+
 static VkSpan transient_gpu_copy(const void *data, uint64_t size, uint64_t align) {
     VkSpan s = transient_gpu(size ? size : 16, align);
-    if (size) memcpy(s.ptr, data, size);
+    PROF_T0();
+    if (size >= ACOPY_MIN && acopy_on()) acopy_push(s.ptr, data, size);
+    else if (size) memcpy(s.ptr, data, size);
+    PROF_ADD(prof_gcpy_ns);
+    if (prof) prof_gcpy_bytes += size;
     return s;
 }
 static VkSpan guest_copy_pool(uint64_t addr, uint64_t size, bool gpu) {  // (gpu: vertex / index data, in VRAM when that ring is on)
@@ -583,6 +670,16 @@ static VkSpan vertex_copy(uint64_t addr, uint64_t need, uint64_t bound, bool per
 copy:;
     uint64_t len = per_vertex && bound <= (8ull << 20) && bound > need ? bound : need;
     VkSpan sp = transient_gpu_copy((const void *)(uintptr_t)addr, len, 256);
+    if (prof && ENV("LARECOMP_VCOPY_SAME")) {  // (research: would a copy kept from an earlier frame still be good?)
+        static struct { uint64_t addr, len, hash; } seen[8192];
+        uint64_t hsh = len;
+        const uint64_t *w = (const uint64_t *)(uintptr_t)addr;
+        for (uint64_t i = 0; i < len / 8; i++) hsh = (hsh ^ w[i]) * 0x9E3779B97F4A7C15ull;
+        uint32_t slot = (uint32_t)((addr >> 4) * 0x9E3779B1u) & 8191;
+        if (seen[slot].addr == addr && seen[slot].len == len && seen[slot].hash == hsh) prof_vsame_bytes += len;
+        prof_vall_bytes += len;
+        seen[slot].addr = addr, seen[slot].len = len, seen[slot].hash = hsh;
+    }
     vcopy[at].addr = addr; vcopy[at].len = len; vcopy[at].seq = seq; vcopy[at].span = sp;
     return sp;
 }
@@ -827,6 +924,14 @@ const char *renderer_stats(void) {
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | views created %llu", (unsigned long long)prof_views_created);
         prof_views_created = 0;
+        n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, " | gpu ring copies %.0f ms %.0f MB (waited %.0f ms), index scans %.0f ms",
+                 prof_gcpy_ns / 1e6, prof_gcpy_bytes / 1048576.0, prof_gcpy_wait_ns / 1e6, prof_scan_ns / 1e6);
+        if (prof_vall_bytes) {
+            n = strlen(stats_text);
+            snprintf(stats_text + n, sizeof stats_text - n, ", vertex bytes as last copied %.1f%%", 100.0 * prof_vsame_bytes / prof_vall_bytes);
+        }
+        prof_gcpy_ns = prof_gcpy_bytes = prof_scan_ns = prof_vsame_bytes = prof_vall_bytes = prof_gcpy_wait_ns = 0;
         // the command types that took 10 ms or more in the window (nvn.h CMD_*): type:ms/count
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, " | ops:");
@@ -4876,6 +4981,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_DRAW_ARRAYS: draw(r, false); break;
         case CMD_DRAW_ELEMENTS: draw(r, true); break;
         case CMD_UPDATE_UNIFORM_BUFFER:
+            acopy_drain();  // (queued copies read guest memory as it was when their draws were recorded)
             memcpy((void *)(uintptr_t)(r->x[0] + r->x[2]), x, r->x[3]);
             guest_copy_flush();  // (cbuf copies shared within the submission are stale now)
             break;
@@ -4893,6 +4999,7 @@ static void exec_list(uint64_t handle, int depth) {
             // every counter within a presented frame (experiment).
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
             uint32_t type = (uint32_t)r->x[0];
+            acopy_drain();  // (it writes guest memory below)
             static uint32_t seen;
             if (type < 32 && !(seen & (1u << type))) { seen |= 1u << type; LOG("[nvn] ReportCounter type %u\n", type); }
             static int frozen = -1;  // 1: frozen; 2: ideal (LARECOMP_VK_COUNTER=ideal: a 33.3 ms frame, 1 ms per counter in it)
@@ -4914,7 +5021,7 @@ static void exec_list(uint64_t handle, int depth) {
         case CMD_COPY_TEXTURE_TO_TEXTURE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], r->x[6]); break; }
         case CMD_DOWNSAMPLE: { const TexRefRec *t = x; copy_texture(&t[0], &t[1], 1); break; }
         case CMD_COPY_BUFFER_TO_TEXTURE: copy_buffer_to_texture(r->x[0], x); break;
-        case CMD_COPY_TEXTURE_TO_BUFFER: copy_texture_to_buffer(x, r->x[3]); break;
+        case CMD_COPY_TEXTURE_TO_BUFFER: acopy_drain(); copy_texture_to_buffer(x, r->x[3]); break;
         case CMD_COPY_BUFFER_TO_BUFFER: {
             // The game's own GPU copy, done by the CPU in command order. Waiting for the GPU first (all the work submitted so far)
             // is only needed when the GPU writes the source or the destination, or reads the destination in place when it runs
@@ -4929,6 +5036,7 @@ static void exec_list(uint64_t handle, int depth) {
                                      (unsigned long long)dst, (unsigned long long)n, wait ? "waits for the GPU" : "no wait");
             }
             if (wait) renderer_flush();
+            else acopy_drain();
             memmove((void *)(uintptr_t)dst, (void *)(uintptr_t)src, n);
             guest_copy_flush();  // (constant copies shared within the submission are stale now, as after UpdateUniformBuffer)
             break;
