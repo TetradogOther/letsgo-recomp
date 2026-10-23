@@ -6,6 +6,6 @@ Comment=Native port of Pokémon: Let's Go, Eevee! and Pikachu! (static recompila
 Exec=letsgo-recomp
 Icon=letsgo-recomp
 Terminal=false
-Categories=Game;RPG;
+Categories=Game;RolePlaying;
 Keywords=pokemon;pokémon;lets go;eevee;picachu;
 StartupNotify=true

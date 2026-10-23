@@ -81,6 +81,13 @@ cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gameli
    runtime/hle/hle_symbols.txt "$STAGE/usr/share/letsgo-recomp/gamelib-src/"
 cp docs/icon/icon_1024.png "$STAGE/usr/share/letsgo-recomp/icon.png"
 cp docs/icon/icon.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/letsgo-recomp.svg"
+# the sizes a desktop asks for (tools/make_icons.py writes them; the 1024 one is the biggest)
+for s in 16 24 32 48 64 128 256 512; do
+    d="$STAGE/usr/share/icons/hicolor/${s}x${s}/apps"
+    mkdir -p "$d"
+    cp "docs/icon/hicolor/${s}x${s}/apps/letsgo-recomp.png" "$d/" 2>/dev/null || true
+done
+mkdir -p "$STAGE/usr/share/icons/hicolor/1024x1024/apps"
 cp docs/icon/icon_1024.png "$STAGE/usr/share/icons/hicolor/1024x1024/apps/letsgo-recomp.png"
 cp third_party/fonts/Baloo2/Baloo2-SemiBold.ttf "$STAGE/usr/share/letsgo-recomp/"
 cp third_party/fonts/Baloo2/OFL.txt "$STAGE/usr/share/letsgo-recomp/Baloo2-OFL.txt"

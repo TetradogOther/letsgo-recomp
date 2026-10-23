@@ -1,6 +1,7 @@
-"""make_icons.py: docs/icon/icon.svg -> icon_1024.png, icon.ico (Windows, 16..256) and icon.icns (macOS).
+"""make_icons.py: docs/icon/icon.svg -> icon_1024.png, icon.ico (Windows, 16..256), icon.icns (macOS) and the
+hicolor set (Linux, the Debian package).
 
-Needs rsvg-convert (MSYS2: mingw-w64-ucrt-x86_64-librsvg). Run from the repository root:
+Needs rsvg-convert (MSYS2: mingw-w64-ucrt-x86_64-librsvg; Debian: librsvg2-bin). Run from the repository root:
   ./.venv/Scripts/python tools/make_icons.py
 """
 import os
@@ -11,6 +12,8 @@ import subprocess
 DIR = os.path.join('docs', 'icon')
 SVG = os.path.join(DIR, 'icon.svg')
 RSVG = shutil.which('rsvg-convert') or r'C:\msys64\ucrt64\bin\rsvg-convert.exe'
+HICOLOR = os.path.join(DIR, 'hicolor')  # (the Debian package's icons: <size>x<size>/apps/letsgo-recomp.png)
+HICOLOR_SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
 
 
 def png(size):
@@ -38,7 +41,17 @@ def main():
         body += code + struct.pack('>I', 8 + len(data)) + data
     with open(os.path.join(DIR, 'icon.icns'), 'wb') as f:
         f.write(b'icns' + struct.pack('>I', 8 + len(body)) + body)
-    print('icon_1024.png, icon.ico (%s), icon.icns written' % ', '.join(map(str, sizes)))
+    # hicolor (Linux): the sizes a desktop asks for, and the scalable one
+    for s in HICOLOR_SIZES:
+        d = os.path.join(HICOLOR, f'{s}x{s}', 'apps')
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, 'letsgo-recomp.png'), 'wb') as f:
+            f.write(png(s))
+    d = os.path.join(HICOLOR, 'scalable', 'apps')
+    os.makedirs(d, exist_ok=True)
+    shutil.copyfile(SVG, os.path.join(d, 'letsgo-recomp.svg'))
+    print('icon_1024.png, icon.ico (%s), icon.icns, hicolor (%s) written'
+          % (', '.join(map(str, sizes)), ', '.join(map(str, HICOLOR_SIZES))))
 
 
 if __name__ == '__main__':
