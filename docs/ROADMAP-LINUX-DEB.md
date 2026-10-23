@@ -85,6 +85,22 @@ duas plataformas.
 O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiros proprios do utilizador**
 (`exefs` + `romfs` de *Let's Go, Eevee!* ou *Pikachu!*).
 
+**Ja testado sem o jogo:**
+
+| Teste | Resultado |
+|---|---|
+| O launcher abre e desenha | ok (a captura em `build/smoke/launcher.png`) |
+| O log nao tem erros | ok (`tools/linux/smoketest.sh`: READY) |
+| A deteccao do jogo (`main.npdm`) | ok (com um `main.npdm` de mentira com o program id do Eevee) |
+| A copia dos ficheiros do jogo | ok (`extracted/exefs/`) |
+| **A imagem do RomFS** (`runtime/romfs_build.c`) | ok (`extracted/romfs.bin` construido a partir da pasta) |
+| O codigo do jogo compilado com o zig e carregado | ok (as tabelas das quatro modulos; falta o NSO) |
+| O crash e o backtrace | ok (`FATAL: cannot load extracted/exefs/main` + backtrace) |
+| O `.deb` de dentro (`/usr/bin`) | ok (abre, desenha, o icone vem de `/usr/share`) |
+| O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
+
+**Falta (precisa dos ficheiros do jogo):**
+
 | # | Teste | Criterio de aceitacao |
 |---|---|---|
 | 4.1 | instalacao limpa | `sudo apt install ./letsgo-recomp_0.6.0_amd64.deb` → o programa no menu; os dados em `~/.local/share/letsgo-recomp` |
@@ -95,7 +111,21 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | 4.6 | controlador | SDL3 gamepad (Xbox/DualSense/Switch Pro) via `/dev/hidraw` |
 | 4.7 | desempenho | 30 fps estaveis (media/P95/P99) no mesmo hardware que o Windows |
 | 4.8 | regressao Windows | o build do Windows continua a passar (`make runtime-objs` em MSYS2) — as correcoes da Fase 0 sao partilhadas |
-| 4.9 | `smoketest` | uma versao Linux do `tools/linux/smoketest.sh` do LAS Recomp (3 lancamentos + capturas) |
+| 4.9 | `smoketest` | `tools/linux/smoketest.sh` (ja existe: o launcher + o log); falta a parte do jogo, com um save de teste |
+
+### O `.nsp` do utilizador
+
+O ficheiro `Pokemon Let_s Go Eevee base.nsp` (4,2 GB) esta **truncado**: o cabecalho 7z diz que o arquivo precisa de
+4.468.430.335 bytes e tem 4.429.185.024 (faltam 37,4 MB). Alem disso, um `.nsp` **nao e o que o runtime quer**: os
+ficheiros do jogo tem de estar extraidos (a pasta com `exefs` e `romfs`, ou `exefs` e `romfs.bin`).
+
+- O **RomFS** (os dados do jogo) nao esta cifrado: pode-se extrair do `.nsp` sem chaves.
+- Os **exefs** (o codigo do jogo) estao cifrados com a chave do titulo: precisam das chaves da consola de quem
+  jogou. O projeto (e este port) nao fornece nem ensina a obter chaves.
+
+Ou seja: para o teste completo falta (a) um `.nsp` completo e (b) os `exefs` descifrados. Ate la, o port fica
+validado ate ao limite do que se pode testar sem o jogo.
+
 
 ## 7. Fase 5 — documentacao (feito)
 
