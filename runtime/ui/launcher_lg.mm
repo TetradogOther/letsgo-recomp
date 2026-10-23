@@ -416,7 +416,7 @@ extern "C" uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);  // r
 static ImTextureID icon_texture(void) {
     char p[1100];
     if (!rt_resource("icon.png", "docs/icon/icon_1024.png", p, sizeof p)) return 0;
-    SDL_Surface *s = SDL_LoadPNG(p);
+    SDL_Surface *s = rt_png_surface(p);
     if (!s) return 0;
     for (int size = s->w / 2; size >= 256; size /= 2) {  // (halved in steps: smooth at the size it is drawn)
         SDL_Surface *t = SDL_ScaleSurface(s, size, size, SDL_SCALEMODE_LINEAR);

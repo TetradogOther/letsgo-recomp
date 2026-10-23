@@ -34,6 +34,7 @@ B         ?= build
 DEPS      ?=
 # EXE_NAME: the exe's name (the release's: LetsGoRecomp); the game code library imports from the exe by it
 EXE_NAME  ?= lasrecomp
+LD        ?= lld  # the linker ("make LD=" for the system's default one, without lld)
 CC       := clang $(CROSS)
 CXX      := clang++ $(CROSS)
 IMGUI    := third_party/imgui
@@ -61,15 +62,17 @@ endif
 GENFLAGS += $(GENARCH) -fPIC
 OSFLAGS  := -Wno-format  # (%llx for uint64_t, which is unsigned long here: the same size)
 SHADERC  ?= -lshaderc  # (Debian / Ubuntu's libshaderc.so; a shaderc built from source: -lshaderc_shared)
-# -rdynamic: crash backtraces name host functions (runtime/platform/linux.c)
-LDFLAGS  := -fuse-ld=lld -rdynamic $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat -lavcodec -lavutil -lswscale \
-            -lvulkan $(SHADERC) -lpthread -ldl -lm
+# LD: the linker (lld, as on Windows); "make LD=" uses the default one (no -fuse-ld), for a system without lld
+# --allow-shlib-undefined: SDL3 (Debian's 3.2.10) asks for libudev's sio_* through dlopen/dlsym, but leaves them
+# undefined in the library: the linker would otherwise refuse the executable
+LDFLAGS  := $(if $(LD),-fuse-ld=$(LD)) -Wl,--allow-shlib-undefined -rdynamic $(if $(DEPS),-L$(DEPS)/lib) \
+            -lSDL3 -lavformat -lavcodec -lavutil -lswscale -lvulkan $(SHADERC) -lpthread -ldl -lm
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
 BACKEND_OBJ := $(patsubst runtime/%.cpp,$(B)/rt/%.o,$(patsubst runtime/%.c,$(B)/rt/%.o,$(BACKEND_SRC)))
 IMGUI_OBJ += $(B)/imgui/imgui_impl_vulkan.o
 UIFLAGS  := -x c++  # the .mm UI sources are plain C++
 GAMELIB  := $(B)/lasgame.so
-GAMELIB_LDFLAGS := -shared -fuse-ld=lld  # (the runtime functions it calls: the app's own, -rdynamic)
+GAMELIB_LDFLAGS := -shared $(if $(LD),-fuse-ld=$(LD))  # (the runtime functions it calls: the app's own, -rdynamic)
 GAMELIB_SHARED := -shared
 else
 EXE      := $(B)/$(EXE_NAME).exe
@@ -77,7 +80,7 @@ DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
 OSFLAGS  := -D_FILE_OFFSET_BITS=64 -D_POSIX_THREAD_SAFE_FUNCTIONS -D_CRT_RAND_S -DWIN32_LEAN_AND_MEAN -DNOMINMAX
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA for the lifted FP/SIMD code (simd.h); override for older CPUs
 GENFLAGS += -D_FILE_OFFSET_BITS=64 $(GENARCH)
-LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat -lavcodec -lavutil -lswscale \
+LDFLAGS  := $(if $(LD),-fuse-ld=$(LD)) -Wl,--stack,16777216 $(if $(DEPS),-L$(DEPS)/lib) -lSDL3 -lavformat -lavcodec -lavutil -lswscale \
             -lvulkan-1 -lwinmm -ldwmapi -lole32 -lshell32 -lcomdlg32 -luuid -lshaderc_shared \
             $(if $(RELEASE),-Wl$(comma)--subsystem$(comma)windows)  # release: no console window (log -> lasrecomp.log)
 BACKEND_SRC := $(wildcard runtime/nvn/vulkan/*.c) $(wildcard runtime/nvn/vulkan/*.cpp)
@@ -89,7 +92,7 @@ UIFLAGS  := -x c++ $(OSFLAGS)  # the .mm UI sources are plain C++
 GAMELIB  := $(B)/lasgame.dll
 # the runtime functions it calls: exported by the .exe, linked through its import library
 LDFLAGS  += -Wl,--export-all-symbols -Wl,--out-implib,$(B)/lasrecomp.dll.a
-GAMELIB_LDFLAGS := -shared -fuse-ld=lld $(B)/lasrecomp.dll.a
+GAMELIB_LDFLAGS := -shared $(if $(LD),-fuse-ld=$(LD)) $(B)/lasrecomp.dll.a
 GAMELIB_SHARED := -shared  # (+ the import library: runtime/gamebuild.c)
 endif
 

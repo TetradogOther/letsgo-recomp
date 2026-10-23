@@ -14,6 +14,7 @@
 
 #include "gamelib.h"
 #include "paths.h"
+#include "png.h"
 #include "platform.h"
 
 static char g_root[1024], g_start[1024], g_exe_dir[1024];
@@ -214,6 +215,22 @@ unsigned long long rt_game_files_size(const char *game_dir) {
 void rt_window_icon(SDL_Window *w) {
     char p[1100];
     if (!rt_resource("icon.png", "docs/icon/icon_1024.png", p, sizeof p)) return;
-    SDL_Surface *s = SDL_LoadPNG(p);
+    SDL_Surface *s = rt_png_surface(p);
     if (s) SDL_SetWindowIcon(w, s), SDL_DestroySurface(s);
+}
+
+// A PNG as an SDL surface, through stb_image (the copy in third_party/stb): SDL3 itself only reads BMP, and
+// SDL3_image isn't a dependency of the build (it isn't in the Linux packages the port links against).
+SDL_Surface *rt_png_surface(const char *path) {
+    int w = 0, h = 0, n = 4;
+    unsigned char *px = rt_png_load(path, &w, &h, 4, &n);
+    if (!px) return NULL;
+    SDL_Surface *src = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGBA32, px, w * 4);
+    if (!src) { rt_png_free(px); return NULL; }
+    // the pixels belong to stb: copy them into a surface of our own, then release them
+    SDL_Surface *out = SDL_CreateSurface(w, h, SDL_PIXELFORMAT_RGBA32);
+    if (out) SDL_BlitSurface(src, NULL, out, NULL);
+    SDL_DestroySurface(src);
+    rt_png_free(px);
+    return out;
 }

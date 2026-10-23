@@ -30,12 +30,7 @@
 #include "../third_party/bcdec/bcdec.h"
 #define STB_DXT_IMPLEMENTATION
 #include "../third_party/stb/stb_dxt.h"
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_NO_STDIO_WARNINGS
-#include "../third_party/stb/stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../third_party/stb/stb_image_write.h"
+#include "png.h"  // the PNG reader and writer (runtime/png.c: the stb implementations live there)
 
 #define PAK "cache/ui2x.pak"
 #define WORK "cache/ui2x_work"
@@ -381,14 +376,14 @@ static bool texture_to_png(const uint8_t *b, uint64_t bsize, uint64_t o, uint32_
         if (!a) { free(px); return false; }
         for (size_t i = 0; i < (size_t)d.pw * d.ph; i++) a[i * 3] = a[i * 3 + 1] = a[i * 3 + 2] = px[i * 4 + 3];
         snprintf(path, sizeof path, WORK "/in/%016llx_a.png", (unsigned long long)d.key);
-        ok = stbi_write_png(path, (int)d.w, (int)d.h, 3, a, (int)d.pw * 3) != 0;
+        ok = rt_png_write(path, a, (int)d.w, (int)d.h, 3);
         free(a);
         bleed(px, d.pw, d.ph);
     }
     // the colour (or the channels in R / G) as RGB
     for (size_t i = 0; i < (size_t)d.pw * d.ph; i++) px[i * 3] = px[i * 4], px[i * 3 + 1] = px[i * 4 + 1], px[i * 3 + 2] = px[i * 4 + 2];
     snprintf(path, sizeof path, WORK "/in/%016llx.png", (unsigned long long)d.key);
-    ok = ok && stbi_write_png(path, (int)d.w, (int)d.h, 3, px, (int)d.pw * 3) != 0;
+    ok = ok && rt_png_write(path, px, (int)d.w, (int)d.h, 3);
     free(px);
     if (!ok) return false;
     if (g_nitems == g_cap_items) {
@@ -479,8 +474,8 @@ static void extract_arc(FILE *f, const char *path, uint64_t off, uint64_t size, 
 // Measured: good images up to 7.2, that garbage 66 to 188.
 static double back_down_error(const char *in_path, const uint8_t *out, int w, int h, int stride, int nc) {
     int iw, ih, ic;
-    uint8_t *in = stbi_load(in_path, &iw, &ih, &ic, 3);
-    if (!in || iw * 2 != w || ih * 2 != h) { stbi_image_free(in); return -1; }
+    uint8_t *in = rt_png_load(in_path, &iw, &ih, 3, &ic);
+    if (!in || iw * 2 != w || ih * 2 != h) { rt_png_free(in); return -1; }
     uint64_t sum = 0;
     for (int y = 0; y < ih; y++)
         for (int x = 0; x < iw; x++)
@@ -490,7 +485,7 @@ static double back_down_error(const char *in_path, const uint8_t *out, int w, in
                 int d = avg - in[((size_t)y * iw + x) * 3 + c];
                 sum += (uint64_t)(d < 0 ? -d : d);
             }
-    stbi_image_free(in);
+    rt_png_free(in);
     return (double)sum / ((double)iw * ih * nc);
 }
 #define BACK_DOWN_MAX 16.0
@@ -515,30 +510,30 @@ static bool pack(void) {
         char path[256];
         snprintf(path, sizeof path, WORK "/out/%016llx.png", (unsigned long long)it->key);
         int w, h, c;
-        uint8_t *px = stbi_load(path, &w, &h, &c, 4);
+        uint8_t *px = rt_png_load(path, &w, &h, 4, &c);
         if (!px) continue;
-        if ((uint32_t)w != it->w * 2 || (uint32_t)h != it->h * 2) { stbi_image_free(px); continue; }
+        if ((uint32_t)w != it->w * 2 || (uint32_t)h != it->h * 2) { rt_png_free(px); continue; }
         snprintf(path, sizeof path, WORK "/in/%016llx.png", (unsigned long long)it->key);
         double err = back_down_error(path, px, w, h, 4, 3);
         bool opaque = true;
         if (it->alpha) {  // (its alpha, upscaled as an image of its own)
             snprintf(path, sizeof path, WORK "/out/%016llx_a.png", (unsigned long long)it->key);
             int aw, ah, ac;
-            uint8_t *a = stbi_load(path, &aw, &ah, &ac, 1);
-            if (!a || aw != w || ah != h) { stbi_image_free(a); stbi_image_free(px); continue; }
+            uint8_t *a = rt_png_load(path, &aw, &ah, 1, &ac);
+            if (!a || aw != w || ah != h) { rt_png_free(a); rt_png_free(px); continue; }
             snprintf(path, sizeof path, WORK "/in/%016llx_a.png", (unsigned long long)it->key);
             double ea = back_down_error(path, a, w, h, 1, 1);  // (the input is grey: its R is the alpha)
             err = ea < 0 ? -1 : err > ea ? err : ea;
             for (size_t k = 0; k < (size_t)w * h; k++) px[k * 4 + 3] = a[k], opaque &= a[k] == 255;
-            stbi_image_free(a);
+            rt_png_free(a);
         }
-        if (err < 0 || err > BACK_DOWN_MAX) { g_rejected++; stbi_image_free(px); continue; }
+        if (err < 0 || err > BACK_DOWN_MAX) { g_rejected++; rt_png_free(px); continue; }
         if (err > g_err_max) g_err_max = err;
         int fmt = it->ch == 1 ? UI2X_BC4 : it->ch == 2 ? UI2X_BC5 : opaque ? UI2X_BC1 : UI2X_BC3;
         uint32_t bpb = fmt == UI2X_BC1 || fmt == UI2X_BC4 ? 8 : 16, wb = ((uint32_t)w + 3) / 4, hb = ((uint32_t)h + 3) / 4;
         uint64_t size = (uint64_t)wb * hb * bpb;
         uint8_t *out = malloc(size);
-        if (!out) { stbi_image_free(px); continue; }
+        if (!out) { rt_png_free(px); continue; }
         for (uint32_t by = 0; by < hb; by++)
             for (uint32_t bx = 0; bx < wb; bx++) {
                 uint8_t blk[64], r[16], rg[32];
@@ -554,7 +549,7 @@ static bool pack(void) {
                 else if (fmt == UI2X_BC5) stb_compress_bc5_block(d, rg);
                 else stb_compress_dxt_block(d, blk, fmt == UI2X_BC3, STB_DXT_HIGHQUAL);
             }
-        stbi_image_free(px);
+        rt_png_free(px);
         fwrite(out, 1, size, f);
         free(out);
         e[n++] = (PakEntry){it->key, it->w, it->h, (uint32_t)fmt, (uint32_t)w, (uint32_t)h, 0, off, size};

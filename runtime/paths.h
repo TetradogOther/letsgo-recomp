@@ -43,7 +43,10 @@ bool rt_remove_game_files(const char *game_dir);
 unsigned long long rt_game_files_size(const char *game_dir);
 
 typedef struct SDL_Window SDL_Window;
+typedef struct SDL_Surface SDL_Surface;
 void rt_window_icon(SDL_Window *w);  // the shipped icon.png, if any
+// A PNG file as an SDL surface (stb_image: no SDL3_image dependency). NULL when it can't be read.
+SDL_Surface *rt_png_surface(const char *path);
 
 #ifdef __cplusplus
 }

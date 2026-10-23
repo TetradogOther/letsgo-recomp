@@ -15,6 +15,7 @@
 #endif
 
 #include "../../paths.h"
+#include "../../png.h"
 #include "../../settings.h"
 #include "../../ui/menu.h"
 #include "vk.h"
@@ -631,10 +632,9 @@ static bool shot_raw(const char *path, const uint8_t *rgba, uint32_t w, uint32_t
 
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) {
     if (shot_raw(path, rgba, w, h)) return;
-    SDL_Surface *s = SDL_CreateSurfaceFrom((int)w, (int)h, SDL_PIXELFORMAT_ABGR8888, (void *)rgba, (int)w * 4);
-    if (!s || !SDL_SavePNG(s, path)) LOG("[vk] saving %s failed: %s\n", path, SDL_GetError());
+    // stb_image_write (the copy in third_party/stb): SDL3 only saves BMP, and SDL3_image isn't a dependency
+    if (!rt_png_write(path, rgba, (int)w, (int)h, 4)) LOG("[vk] saving %s failed\n", path);
     else LOG("[vk] saved %s (%ux%u)\n", path, w, h);
-    SDL_DestroySurface(s);
 }
 
 // ================================================================== game presentation (metal.m backend_present)

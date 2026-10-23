@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>  // stat, S_ISREG (the file the movie is read from)
 
 #include "../hle.h"
 #include "../mods.h"

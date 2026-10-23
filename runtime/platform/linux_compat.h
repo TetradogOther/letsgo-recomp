@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/random.h>
+#include <unistd.h>  // rmdir, unlink, ... (POSIX; Windows has its own in platform/win_compat.h)
 
 #if !__GLIBC_PREREQ(2, 38)
 static inline size_t strlcpy(char *d, const char *s, size_t n) {

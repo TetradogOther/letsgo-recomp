@@ -26,7 +26,15 @@
 extern "C" {
 #endif  // #if defined(__cplusplus)
 
+// __declspec is MSVC's; on the other compilers (clang on Linux, for the Vulkan backend) the same visibility is
+// asked for with the attribute GCC understands.
+#if defined(_MSC_VER)
 #define FFX_API_ENTRY __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+#define FFX_API_ENTRY __attribute__((visibility("default")))
+#else
+#define FFX_API_ENTRY
+#endif
 #include <stdint.h>
 
 enum FfxApiReturnCodes
