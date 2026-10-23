@@ -251,6 +251,74 @@ static int unpack_7z(const char *path, const char *out_dir, char *why, size_t wh
     return r;
 }
 
+// The files of the package, in a folder: the container (7z, zip) unpacked, and, if there was a .nsp inside, its
+// contents too (the .nca files).
+static int unpack_package(const char *path, const char *dir, char *why, size_t why_size) {
+    mkdir(dir, 0755);
+    FILE *f = fopen(path, "rb");
+    if (!f) { snprintf(why, why_size, "can't read %s", path); return NSP_ERR_IO; }
+    uint8_t head[8];
+    size_t got = fread(head, 1, sizeof head, f);
+    fclose(f);
+    if (got >= 4 && !memcmp(head, "PFS0", 4)) return pfs0_extract(path, dir, why, why_size);
+    if (got >= 6 && !memcmp(head, "7z\xbc\xaf\x27\x1c", 6)) return unpack_7z(path, dir, why, why_size) ? NSP_OK : NSP_ERR_IO;
+    // a zip: the system's archiver
+    if (got >= 2 && head[0] == 'P' && head[1] == 'K') {
+        if (plat_unpack(path, dir, NULL) == 0) return NSP_OK;
+        snprintf(why, why_size, "can't unpack the zip");
+        return NSP_ERR_IO;
+    }
+    snprintf(why, why_size, "not a .nsp (PFS0), a 7z nor a zip");
+    return NSP_ERR_FORMAT;
+}
+
+// The content archives (.nca) in a folder (in the package, or in the .nsp inside it)
+static int find_nca(const char *dir, char out[][1200], int max, int depth) {
+    int n = 0;
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        const char *name = e->d_name;
+        if (name[0] == '.') continue;
+        char p[1200];
+        snprintf(p, sizeof p, "%s/%s", dir, name);
+        size_t len = strlen(name);
+        if (len > 4 && !strcasecmp(name + len - 4, ".nca")) {
+            if (strstr(name, "cnmt")) continue;  // (the meta: no game inside)
+            if (n < max) snprintf(out[n++], 1200, "%s", p);
+        } else if (depth > 0 && is_dir(p))
+            n += find_nca(p, out + n, max - n, depth - 1);
+    }
+    closedir(d);
+    return n;
+}
+
+// The exefs' folder (main + main.npdm) in a folder, if it is there
+static bool find_exefs_in(const char *dir, char *out, size_t n, int depth) {
+    char p[1200];
+    snprintf(p, sizeof p, "%s/main.npdm", dir);
+    if (is_file(p)) {
+        snprintf(p, sizeof p, "%s/main", dir);
+        if (is_file(p)) {
+            snprintf(out, n, "%s", dir);
+            return true;
+        }
+    }
+    if (depth > 2) return false;
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    struct dirent *e;
+    bool found = false;
+    while (!found && (e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (is_dir(p)) found = find_exefs_in(p, out, n, depth + 1);
+    }
+    closedir(d);
+    return found;
+}
+
 // ---- decrypting with hactool
 // The game's code and data are encrypted with the console's keys: hactool (the user's own program) does the
 // decryption, with the keys file the user dumped from their console. This only runs it.
@@ -265,46 +333,36 @@ int nsp_decrypt(const char *package, const char *keys, const char *hactool, cons
     why[0] = 0;
     if (!keys || !keys[0]) { snprintf(why, why_size, "no keys file"); return NSP_ERR_FORMAT; }
     if (!hactool || !hactool[0]) { snprintf(why, why_size, "no hactool"); return NSP_ERR_FORMAT; }
-    char nca[1200], exefs[1200], romfs[1200];
+    char work[1200], exefs[1200], romfs[1200];
     int code = 0;
-    snprintf(nca, sizeof nca, "%s/nca", out_dir);
+    snprintf(work, sizeof work, "%s/pkg", out_dir);
     snprintf(exefs, sizeof exefs, "%s/exefs", out_dir);
     snprintf(romfs, sizeof romfs, "%s/romfs", out_dir);
     mkdir(out_dir, 0755);
-    mkdir(nca, 0755);
-    // 1. the container: the content archives (.nca) it holds
-    char dir[1300];
-    snprintf(dir, sizeof dir, "--pfs0dir=%s", nca);
-    const char *pfs0b[] = {hactool, "-k", keys, "--intype=pfs0", dir, "-x", package, NULL};
-    if (!run(pfs0b, &code) || code != 0) {
-        snprintf(why, why_size, "hactool could not read the package (%d): are the keys the right ones?", code);
-        return NSP_ERR_ENCRYPTED;
-    }
-    // 2. each content archive: the code (the exefs) and the data (the RomFS)
-    DIR *d = opendir(nca);
-    if (!d) { snprintf(why, why_size, "the package has no content archives"); return NSP_ERR_FORMAT; }
-    struct dirent *e;
-    int found = 0;
-    while ((e = readdir(d))) {
-        const char *n = e->d_name;
-        size_t len = strlen(n);
-        if (len < 5 || strcasecmp(n + len - 4, ".nca")) continue;
-        if (strstr(n, "cnmt")) continue;  // (the meta: no game inside)
-        char path[1400];
-        snprintf(path, sizeof path, "%s/%s", nca, n);
+
+    // 1. the container: the package unpacked (7z, zip) and, if there was a .nsp inside, its contents
+    int rc = unpack_package(package, work, why, why_size);
+    if (rc != NSP_OK) return rc;
+
+    // 2. the content archives (.nca): each one has the code (the exefs) and the data (the RomFS)
+    char nca[16][1200];
+    int nnca = find_nca(work, nca, 16, 3);
+    for (int i = 0; i < nnca; i++) {
         char ex[1300], ro[1300];
         snprintf(ex, sizeof ex, "--exefsdir=%s", exefs);
         snprintf(ro, sizeof ro, "--romfsdir=%s", romfs);
-        const char *args[] = {hactool, "-k", keys, ex, ro, path, NULL};
+        const char *args[] = {hactool, "-k", keys, ex, ro, nca[i], NULL};
         if (!run(args, &code) || code != 0) {
-            closedir(d);
-            snprintf(why, why_size, "hactool could not decrypt %s (%d): are the keys the right ones?", n, code);
+            snprintf(why, why_size, "hactool could not decrypt %s (%d): are the keys the right ones?",
+                     strrchr(nca[i], '/') + 1, code);
             return NSP_ERR_ENCRYPTED;
         }
-        found++;
     }
-    closedir(d);
-    if (!found) { snprintf(why, why_size, "no game content in the package"); return NSP_ERR_FORMAT; }
+    // 3. the exefs, if they were not in a content archive (a package with the ExeFS loose)
+    if (!nnca && !find_exefs_in(work, exefs, sizeof exefs, 2)) {
+        snprintf(why, why_size, "no game content in the package");
+        return NSP_ERR_FORMAT;
+    }
     return NSP_OK;
 }
 

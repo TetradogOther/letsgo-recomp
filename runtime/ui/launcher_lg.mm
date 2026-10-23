@@ -299,7 +299,16 @@ static void game_files_section(SDL_Window *win) {
         } else if (ui_button(T("Select keys file...", "Selecionar o ficheiro de chaves..."), -1))
             SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
         static char ht[1024] = "";
-        if (!ht[0]) snprintf(ht, sizeof ht, "%s", "hactool");
+        if (!ht[0]) {
+            // the one in the package (the Debian package ships it), else the system's
+            char p[1100];
+            if (rt_resource("hactool", NULL, p, sizeof p)) {
+                // (the path with the ".." in the middle, tidied up)
+                char real[1100];
+                snprintf(ht, sizeof ht, "%s", realpath(p, real) ? real : p);
+            } else
+                snprintf(ht, sizeof ht, "%s", "hactool");
+        }
         ImGui::SetNextItemWidth(-1);
         ImGui::InputTextWithHint("##hactool", "hactool", ht, sizeof ht);
         ImGui::TextDisabled("%s", T("The hactool program (the one that reads the keys and decrypts the content).",
@@ -566,6 +575,7 @@ extern "C" void launcher_lg_run(const char *root) {
     // a package with the game inside (the keys and hactool, if the code is encrypted)
     if (getenv("LARECOMP_SETUP_PACKAGE")) {
         const char *k = getenv("LARECOMP_KEYS"), *h = getenv("LARECOMP_HACTOOL");
+        snprintf(g_package, sizeof g_package, "%s", getenv("LARECOMP_SETUP_PACKAGE"));
         if (k && *k && h && *h) setup_start_decrypt(getenv("LARECOMP_SETUP_PACKAGE"), k, h);
         else setup_start_package(getenv("LARECOMP_SETUP_PACKAGE"));
     }
