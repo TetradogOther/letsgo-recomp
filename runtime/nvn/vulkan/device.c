@@ -870,7 +870,20 @@ double vk_display_hz(void) {
     }
     return hz;
 #else
-    return 0;
+    // the display mode's refresh rate (SDL): the mode the window is on. Read at most once a second (the frame
+    // generation's "Auto" asks for it every frame).
+    static double hz;
+    static uint64_t at;
+    uint64_t now = SDL_GetTicksNS();
+    if (at && now - at < 1000000000ull) return hz;
+    at = now;
+    hz = 0;
+    SDL_DisplayID id = window ? SDL_GetDisplayForWindow(window) : SDL_GetPrimaryDisplay();
+    if (id) {
+        const SDL_DisplayMode *m = SDL_GetCurrentDisplayMode(id);
+        if (m && m->refresh_rate > 0) hz = m->refresh_rate;
+    }
+    return hz;
 #endif
 }
 
