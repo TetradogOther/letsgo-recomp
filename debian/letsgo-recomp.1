@@ -1,0 +1,64 @@
+.TH LETNGO-RECOMP 1 "2026-10-23" "letsgo-recomp 0.6.0" "User Commands"
+.SH NAME
+letsgo\-recomp \- native port of Pok\u00e9mon: Let's Go, Eevee! and Pikachu!
+.SH SYNOPSIS
+.B letsgo-recomp
+.RI [ FOLDER ]
+.RB [ \-\-play ]
+.SH DESCRIPTION
+A native Linux port of the Nintendo Switch games
+.BR "Pok\u00e9mon: Let's Go, Eevee!" " and" "Pok\u00e9mon: Let's Go, Pikachu!" ,
+made by static recompilation: the games' ARM64 code is translated into C and
+compiled for the computer, and a runtime stands in for the Switch (system
+services, NVN graphics on Vulkan, audio, controllers). It is not an emulator.
+.PP
+Without arguments the start screen opens: pick the folder with your own
+extracted game files (the one with
+.B exefs
+and
+.BR romfs ),
+wait while they are copied and the game code is recompiled for your computer
+(once), and press Play.
+.PP
+With
+.I FOLDER
+the start screen sets that folder up at once.
+.SH OPTIONS
+.TP
+.B \-\-play
+Skips the start screen and goes straight to the game (the game files have to be
+set up already).
+.SH FILES
+Everything the program writes lives in
+.IR $XDG_DATA_HOME/letsgo-recomp ,
+or
+.I ~/.local/share/letsgo-recomp
+by default:
+.TP
+.B extracted/
+The game's own files (copied from the folder you picked) and the game code
+compiled from them.
+.TP
+.B save/
+The game's saves.
+.TP
+.B cache/
+The shader cache, and the textures of the 2x interface.
+.TP
+.B larecomp.ini
+The settings.
+.TP
+.B lasrecomp.log
+The log (the previous run is kept as lasrecomp-prev.log).
+.PP
+.B LARECOMP_DATA_ROOT
+uses another folder for all of it.
+.SH REQUIREMENTS
+A Vulkan 1.3 driver, and (on x86-64) a CPU with AVX2 (Intel Haswell / 2013 or
+newer, AMD Excavator / Zen or newer).
+.SH NOTES
+No game files are included: you need your own legally obtained copy of the
+game, extracted. This is a fan project, not affiliated with Nintendo, The
+Pok\u00e9mon Company, Game Freak or Creatures.
+.SH SEE ALSO
+The project's README and docs/ on the source repository.

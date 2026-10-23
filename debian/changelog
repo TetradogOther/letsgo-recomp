@@ -1,0 +1,10 @@
+letsgo-recomp (0.6.0-1) unstable; urgency=medium
+
+  * Port nativo para Linux: o runtime compila, linka e corre no Debian (Vulkan).
+  * O empacotamento .deb: o runtime, o gerador do codigo do jogo, o compilador
+    (zig) e os headers com que o codigo do jogo e compilado na maquina de quem
+    joga. Os ficheiros do jogo nao vao no pacote.
+  * Mods e a interface 2x passam a funcionar no Linux (bsdtar, o release
+    linux do upscaler).
+
+ -- Let's Go Recomp port <port@localhost>  Fri, 23 Oct 2026 22:00:00 +0000

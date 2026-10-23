@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Let's Go Recomp
+GenericName=Pokémon: Let's Go port
+Comment=Native port of Pokémon: Let's Go, Eevee! and Pikachu! (static recompilation)
+Exec=letsgo-recomp
+Icon=letsgo-recomp
+Terminal=false
+Categories=Game;RPG;
+Keywords=pokemon;pokémon;lets go;eevee;picachu;
+StartupNotify=true

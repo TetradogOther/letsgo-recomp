@@ -1,0 +1,30 @@
+Package: letsgo-recomp
+Version: 0.6.0
+Section: games
+Priority: optional
+Architecture: amd64 arm64
+Maintainer: Let's Go Recomp port <port@localhost>
+Homepage: https://github.com/TetradogOther/letsgo-recomp
+Bug-URL: https://github.com/TetradogOther/letsgo-recomp/issues
+Depends: libc6 (>= 2.38), libstdc++6 (>= 12), libgcc-s1, libsdl3-0 (>= 3.2.10),
+ libvulkan1, libshaderc1, libavcodec61, libavformat61, libavutil59, libswscale8,
+ libarchive-tools, curl, ca-certificates
+Recommends: vulkan-tools, mesa-vulkan-drivers | nvidia-driver-535 | amd64-microcode
+Suggests: gamepadtool, joystick
+Description: native port of Pokémon: Let's Go, Eevee! / Pikachu! (static recompilation)
+ A native Linux port of the Nintendo Switch games Pokémon: Let's Go, Eevee! and
+ Pokémon: Let's Go, Pikachu!, made by static recompilation: the games' ARM64 code
+ is translated into C and compiled for the computer, and a runtime stands in for
+ the Switch (system services, NVN graphics on Vulkan, audio, controllers). It is
+ not an emulator.
+ .
+ The package carries the runtime, the start screen and the tools the start screen
+ needs to recompile the game on the player's own machine (the game code
+ generator, the C compiler and the headers the game code is built against). The
+ game's own files are not included: you need your own legally obtained copy,
+ extracted (the exefs and romfs folders).
+ .
+ Everything the program writes (game files, saves, settings, shader caches, the
+ log) stays in $XDG_DATA_HOME/letsgo-recomp (~/.local/share/letsgo-recomp).
+ .
+ Not affiliated with Nintendo, The Pokémon Company, Game Freak or Creatures.

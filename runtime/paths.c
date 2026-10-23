@@ -126,16 +126,20 @@ void rt_paths_init(void) {
 const char *rt_data_root(void) { return g_root; }
 
 bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
-    char c[4][1100] = {{0}};
+    char c[5][1100] = {{0}};
     if (name) {
         snprintf(c[0], sizeof c[0], "%s" SEP "%s", g_exe_dir, name);
         snprintf(c[1], sizeof c[1], "%s" SEP ".." SEP "Resources" SEP "%s", g_exe_dir, name);  // .app/Contents/Resources
+        // the Debian package: the program in <prefix>/bin, what it ships in <prefix>/share/letsgo-recomp
+        const char *slash = strrchr(g_exe_dir, '/');
+        if (slash && !strcmp(slash + 1, "bin"))
+            snprintf(c[4], sizeof c[4], "%s" SEP ".." SEP "share" SEP RT_PKG_DIR SEP "%s", g_exe_dir, name);
     }
     if (dev_rel) {
         snprintf(c[2], sizeof c[2], "%s" SEP "%s", g_start, dev_rel);
         snprintf(c[3], sizeof c[3], "%s" SEP ".." SEP "%s", g_exe_dir, dev_rel);  // build/lasrecomp -> repo root
     }
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < 5; i++)
         if (c[i][0] && exists(c[i])) return (size_t)snprintf(out, n, "%s", c[i]) < n;  // (as is: a venv python must stay a link)
     return false;
 }
