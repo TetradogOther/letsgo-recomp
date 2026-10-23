@@ -251,6 +251,63 @@ static int unpack_7z(const char *path, const char *out_dir, char *why, size_t wh
     return r;
 }
 
+// ---- decrypting with hactool
+// The game's code and data are encrypted with the console's keys: hactool (the user's own program) does the
+// decryption, with the keys file the user dumped from their console. This only runs it.
+static bool run(const char *const argv[], int *code) {
+    PlatProc p = plat_spawn(argv, NULL, false);
+    if (!p) { *code = -1; return false; }
+    *code = plat_proc_wait(p, true);
+    return true;
+}
+
+int nsp_decrypt(const char *package, const char *keys, const char *hactool, const char *out_dir, char *why, size_t why_size) {
+    why[0] = 0;
+    if (!keys || !keys[0]) { snprintf(why, why_size, "no keys file"); return NSP_ERR_FORMAT; }
+    if (!hactool || !hactool[0]) { snprintf(why, why_size, "no hactool"); return NSP_ERR_FORMAT; }
+    char nca[1200], exefs[1200], romfs[1200];
+    int code = 0;
+    snprintf(nca, sizeof nca, "%s/nca", out_dir);
+    snprintf(exefs, sizeof exefs, "%s/exefs", out_dir);
+    snprintf(romfs, sizeof romfs, "%s/romfs", out_dir);
+    mkdir(out_dir, 0755);
+    mkdir(nca, 0755);
+    // 1. the container: the content archives (.nca) it holds
+    char dir[1300];
+    snprintf(dir, sizeof dir, "--pfs0dir=%s", nca);
+    const char *pfs0b[] = {hactool, "-k", keys, "--intype=pfs0", dir, "-x", package, NULL};
+    if (!run(pfs0b, &code) || code != 0) {
+        snprintf(why, why_size, "hactool could not read the package (%d): are the keys the right ones?", code);
+        return NSP_ERR_ENCRYPTED;
+    }
+    // 2. each content archive: the code (the exefs) and the data (the RomFS)
+    DIR *d = opendir(nca);
+    if (!d) { snprintf(why, why_size, "the package has no content archives"); return NSP_ERR_FORMAT; }
+    struct dirent *e;
+    int found = 0;
+    while ((e = readdir(d))) {
+        const char *n = e->d_name;
+        size_t len = strlen(n);
+        if (len < 5 || strcasecmp(n + len - 4, ".nca")) continue;
+        if (strstr(n, "cnmt")) continue;  // (the meta: no game inside)
+        char path[1400];
+        snprintf(path, sizeof path, "%s/%s", nca, n);
+        char ex[1300], ro[1300];
+        snprintf(ex, sizeof ex, "--exefsdir=%s", exefs);
+        snprintf(ro, sizeof ro, "--romfsdir=%s", romfs);
+        const char *args[] = {hactool, "-k", keys, ex, ro, path, NULL};
+        if (!run(args, &code) || code != 0) {
+            closedir(d);
+            snprintf(why, why_size, "hactool could not decrypt %s (%d): are the keys the right ones?", n, code);
+            return NSP_ERR_ENCRYPTED;
+        }
+        found++;
+    }
+    closedir(d);
+    if (!found) { snprintf(why, why_size, "no game content in the package"); return NSP_ERR_FORMAT; }
+    return NSP_OK;
+}
+
 int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_size) {
     why[0] = 0;
     mkdir(out_dir, 0755);

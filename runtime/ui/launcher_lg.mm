@@ -177,6 +177,8 @@ static void ui2x_section(bool ready, bool *on) {
 static pthread_mutex_t g_pick_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_pick_game[1024], g_pick_mod[1024];
 static char g_package[1024];  // (the package the setup was given: its password can be tried again)
+static char g_pick_keys[1024];  // (the keys file the user picked: their console's)
+static char g_keys[1024];      // (the keys file in use)
 static void SDLCALL picked_game(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
@@ -191,6 +193,12 @@ static void SDLCALL picked_package(void *, const char *const *files, int) {
     if (!files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
     snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
+    pthread_mutex_unlock(&g_pick_lock);
+}
+static void SDLCALL picked_keys(void *, const char *const *files, int) {
+    if (!files || !files[0]) return;
+    pthread_mutex_lock(&g_pick_lock);
+    snprintf(g_pick_keys, sizeof g_pick_keys, "%s", files[0]);
     pthread_mutex_unlock(&g_pick_lock);
 }
 static void SDLCALL picked_mod(void *, const char *const *files, int) {
@@ -273,6 +281,32 @@ static void game_files_section(SDL_Window *win) {
     static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp;7z;xci;zip"}, {"All files", "*"}};
     if (ui_button(T("Select game file (.nsp)...", "Selecionar ficheiro do jogo (.nsp)..."), -1))
         SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 2, NULL, false);
+    // a package whose code is encrypted: the keys of the user's console, and hactool to use them
+    if (st == SETUP_FAIL_ENCRYPTED && g_package[0]) {
+        static const SDL_DialogFileFilter kf[] = {{"Keys", "dat;keys;prod"}, {"All files", "*"}};
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", T("This package's code is encrypted. It needs the keys of the console that played "
+                                    "the game (the keys.dat or prod.keys you dumped from it) and hactool to read them.",
+                                    "O código deste pacote está cifrado. Precisa das chaves da consola onde jogaste "
+                                    "(o keys.dat ou prod.keys que extraíste dela) e do hactool para as ler."));
+        ImGui::PopTextWrapPos();
+        char keys[1024] = "";
+        if (take(g_pick_keys, keys, sizeof keys)) g_keys[0] = 0, snprintf(g_keys, sizeof g_keys, "%s", keys);
+        if (g_keys[0]) {
+            ImGui::TextDisabled("%s", g_keys);
+            if (ui_button(T("Change keys file...", "Trocar o ficheiro de chaves..."), -1))
+                SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
+        } else if (ui_button(T("Select keys file...", "Selecionar o ficheiro de chaves..."), -1))
+            SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
+        static char ht[1024] = "";
+        if (!ht[0]) snprintf(ht, sizeof ht, "%s", "hactool");
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##hactool", "hactool", ht, sizeof ht);
+        ImGui::TextDisabled("%s", T("The hactool program (the one that reads the keys and decrypts the content).",
+                                    "O programa hactool (o que lê as chaves e descifra o conteúdo)."));
+        if (g_keys[0] && ui_button(T("Decrypt and set up", "Descifrar e preparar"), -1))
+            setup_start_decrypt(g_package, g_keys, ht);
+    }
     // a package that asks for a password (the repacks often encrypt the file list)
     if (st == SETUP_FAIL_PACKAGE && g_package[0]) {
         static char pw[256] = "";
@@ -529,6 +563,12 @@ extern "C" void launcher_lg_run(const char *root) {
     int tab = getenv("LARECOMP_LAUNCHER_TAB") ? atoi(getenv("LARECOMP_LAUNCHER_TAB")) : keys_test ? TAB_CONTROLS : TAB_GAME;
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
+    // a package with the game inside (the keys and hactool, if the code is encrypted)
+    if (getenv("LARECOMP_SETUP_PACKAGE")) {
+        const char *k = getenv("LARECOMP_KEYS"), *h = getenv("LARECOMP_HACTOOL");
+        if (k && *k && h && *h) setup_start_decrypt(getenv("LARECOMP_SETUP_PACKAGE"), k, h);
+        else setup_start_package(getenv("LARECOMP_SETUP_PACKAGE"));
+    }
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
     static const float bg[4] = {0.86f, 0.93f, 0.47f, 1};  // (the F12 menu's look: ui_backdrop over it)
     const ImVec4 side_bg(1, 1, 1, 0.55f), gold(0.98f, 0.82f, 0.22f, 1), gold_hover(1.0f, 0.88f, 0.38f, 1),

@@ -25,6 +25,10 @@ int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_siz
 bool nsp_find_exefs(const char *dir, char *out, size_t n);
 // The password of an archive that asks for one (the repacks often have the file list encrypted). NULL: none.
 void nsp_set_password(const char *pw);
+// Decrypts a package with hactool (the user's own console's keys, and the program they have): the game's code and
+// its data come out in out_dir (exefs/ and romfs/). The keys and hactool are the user's: this does not come with
+// the program. NSP_OK, or one of the errors above (why says which).
+int nsp_decrypt(const char *package, const char *keys, const char *hactool, const char *out_dir, char *why, size_t why_size);
 
 #ifdef __cplusplus
 }

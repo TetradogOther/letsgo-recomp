@@ -29,9 +29,20 @@ No launcher, clica em **Selecionar pasta do jogo...** e escolhe a pasta com a tu
 `romfs`, ou um `romfs.bin`).
 
 Tambem pode ser o proprio `.nsp` (ou um `.7z` com ele dentro): o programa descompacta-o (o contentor nao esta
-cifrado, por isso nao sao preciso chaves) e continua como se tivesses dado a pasta dos ficheiros extraidos. Se o
-codigo do jogo estiver cifrado (as chaves da consola), o launcher avisa: nesse caso so as chaves de quem jogou
-conseguem ler.
+cifrado, por isso nao sao preciso chaves) e continua como se tivesses dado a pasta dos ficheiros extraidos.
+
+### Se o codigo do jogo estiver cifrado
+
+O codigo do jogo (os NSO) vai cifrado com as chaves da consola. Quando o launcher lo detecta, pede:
+
+1. **o ficheiro de chaves** da tua consola (o `keys.dat` ou o `prod.keys` que extraiste dela);
+2. **o `hactool`** (o programa que le as chaves e descifra o conteudo) — o caminho dele, ou `hactool` no PATH.
+
+E entao descifra o pacote e segue com o set up como se tivesses dado a pasta dos ficheiros.
+
+O `hactool` nao vem no pacote (a politica do Debian nao aceita ferramentas de contornamento dentro de um pacote):
+usa o binario do Windows de [SciresM/hactool](https://github.com/SciresM/hactool) ou, no Linux, o dos repositorios
+(NixOS, AUR, openSUSE) ou compilado da fonte. As chaves sao **da tua consola** — nao se descarregam de lado nenhum.
 
 A primeira vez, o launcher:
 

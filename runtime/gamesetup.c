@@ -35,6 +35,7 @@ static _Atomic float g_progress;
 static _Atomic bool g_running;
 static char g_folder[1024];
 static char g_package[1024];    // (a package with the game inside: .nsp, .7z)
+static char g_keys[1024], g_hactool[1024];  // (the keys and hactool, to decrypt it: the user's own console's)
 static char g_unpacked[1024];  // (the folder the package was unpacked into: removed when the files are copied)
 
 int setup_state(void) { return g_state; }
@@ -222,7 +223,8 @@ static void *setup_thread(void *arg) {
         snprintf(dir, sizeof dir, "%s/.nsp", rt_data_root());
         plat_remove_tree(dir);
         mkdir(dir, 0755);
-        int rc = nsp_extract(f.package_path, dir, why, sizeof why);
+        int rc = g_keys[0] ? nsp_decrypt(f.package_path, g_keys, g_hactool, dir, why, sizeof why)
+                            : nsp_extract(f.package_path, dir, why, sizeof why);
         if (rc != NSP_OK) {
             LOG("[setup] %s: %s\n", f.package_path, why);
             g_state = rc == NSP_ERR_ENCRYPTED ? SETUP_FAIL_ENCRYPTED : SETUP_FAIL_PACKAGE;
@@ -297,6 +299,22 @@ void setup_start(const char *folder) {
     snprintf(g_folder, sizeof g_folder, "%s", folder ? folder : "");
     for (char *c = g_folder; *c; c++) if (*c == '\\') *c = '/';
     g_package[0] = 0;
+    g_running = true;
+    g_state = SETUP_LOOKING;
+    pthread_t t;
+    pthread_create(&t, NULL, setup_thread, NULL);
+    pthread_detach(t);
+}
+
+// A package whose code is encrypted: it is decrypted with the user's keys and their hactool (runtime/nsp.c), and
+// the setup goes on with the files that come out.
+void setup_start_decrypt(const char *path, const char *keys, const char *hactool) {
+    if (g_running) return;
+    snprintf(g_package, sizeof g_package, "%s", path ? path : "");
+    snprintf(g_keys, sizeof g_keys, "%s", keys ? keys : "");
+    snprintf(g_hactool, sizeof g_hactool, "%s", hactool ? hactool : "");
+    for (char *c = g_package; *c; c++) if (*c == '\\') *c = '/';
+    g_folder[0] = 0;
     g_running = true;
     g_state = SETUP_LOOKING;
     pthread_t t;

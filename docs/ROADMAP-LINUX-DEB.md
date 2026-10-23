@@ -102,7 +102,7 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 
 | O `.nsp` descompactado pelo programa | ok (um `.nsp` de mentira: `tools/linux/make_test_nsp.py` + `test_nsp.c`) |
 | O `.nsp` em 7z | ok (o `bsdtar` descompacta, o `.nsp` de dentro e lido) |
-| O codigo cifrado | ok (o launcher diz que precisa das chaves da consola) |
+| O codigo cifrado | ok (o launcher pede as chaves e o hactool, e descifra com eles: a orquestracao esta testada com um hactool de mentira; o hactool a serio nao vem no pacote - politica do Debian) |
 | Os programas lancados pelo nome | ok (o `posix_spawn` nao procura no PATH: corrigido) |
 
 **Falta (precisa dos ficheiros do jogo):**

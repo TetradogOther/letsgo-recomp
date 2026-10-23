@@ -43,6 +43,8 @@ const char *game_version(const char *exefs);
 void setup_start(const char *folder);
 // Starts a setup from a package with the game inside (.nsp, or a 7z with one): the program unpacks it.
 void setup_start_package(const char *path);
+// Starts a setup from a package whose code is encrypted: it is decrypted with the user's keys and hactool.
+void setup_start_decrypt(const char *path, const char *keys, const char *hactool);
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);
