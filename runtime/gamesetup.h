@@ -12,6 +12,7 @@ extern "C" {
 enum {
     SETUP_IDLE,         // nothing running
     SETUP_LOOKING,      // looking for the game files in the picked folder
+    SETUP_UNPACKING,    // unpacking a package (.nsp, .7z) with the game inside
     SETUP_COPYING,      // copying exefs / the RomFS image
     SETUP_IMAGE,        // building the RomFS image from romfs/
     SETUP_READING,      // generator: translating the game code
@@ -21,6 +22,7 @@ enum {
     // failures (setup_state)
     SETUP_FAIL_NOT_FOUND,   // no exefs/main + romfs in that folder
     SETUP_FAIL_PACKAGE,     // .xci / .nsp found instead of extracted files
+    SETUP_FAIL_ENCRYPTED,   // the package's code is encrypted (it needs the console's keys)
     SETUP_FAIL_VERSION,     // not Let's Go, Eevee! / Pikachu! (main.npdm's program id)
     SETUP_FAIL_COPY,        // disk full / unreadable files
     SETUP_FAIL_BUILD,       // the game code didn't build

@@ -200,13 +200,15 @@ static void game_files_section(SDL_Window *win) {
     ui_heading(T("Game files", "Arquivos do jogo"));
     int st = setup_state();
     if (setup_running()) {
-        static const char *const en[] = {"", "Looking for the game files...", "Copying the game files...",
+        static const char *const en[] = {"", "Looking for the game files...", "Unpacking the game files...",
+                                         "Copying the game files...",
                                          "Building the game data image...", "Reading the game code...",
                                          "Recompiling the game code...", "Finishing..."};
-        static const char *const pt[] = {"", "Procurando os arquivos do jogo...", "Copiando os arquivos do jogo...",
+        static const char *const pt[] = {"", "Procurando os arquivos do jogo...", "Descompactando os arquivos do jogo...",
+                                         "Copiando os arquivos do jogo...",
                                          "Montando a imagem de dados do jogo...", "Lendo o código do jogo...",
                                          "Recompilando o código do jogo...", "Finalizando..."};
-        ImGui::TextUnformatted(st >= 1 && st <= 6 ? T(en[st], pt[st]) : "...");
+        ImGui::TextUnformatted(st >= 1 && st <= 7 ? T(en[st], pt[st]) : "...");
         ImGui::ProgressBar(setup_progress(), ImVec2(-FLT_MIN, 0));
         ImGui::TextDisabled("%s", T("This takes a while (10-30 minutes), only once. The game can be played when it's done.",
                                     "Isso demora (de 10 a 30 minutos), só uma vez. O jogo fica liberado quando terminar."));
@@ -222,20 +224,26 @@ static void game_files_section(SDL_Window *win) {
     }
     if (st >= SETUP_FAIL_NOT_FOUND) {
         static const char *const en[] = {"No game files found in that folder.", "Those are packed game files (.xci / .nsp).",
+                                         "The game's code is encrypted: it needs your console's keys.",
                                          "That's not Pokémon: Let's Go, Eevee! or Pikachu!.", "The files couldn't be copied.",
                                          "The game code didn't build.", "The game code builder is missing from this copy."};
         static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo empacotados (.xci / .nsp).",
+                                         "O código do jogo está cifrado: precisa das chaves do seu console.",
                                          "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.", "Os arquivos não puderam ser copiados.",
                                          "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia."};
         static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.", "Extract them first (exefs and romfs).",
+                                           "Only the keys of the console that played it can read it.",
                                            "Pick the folder of your own extracted Let's Go, Eevee! or Pikachu!.", "Check there are about 6 GB free and try again.",
                                            "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again."};
         static const char *const pt_h[] = {"Escolha a pasta que tem exefs e romfs.", "Extraia antes (exefs e romfs).",
+                                           "Só as chaves do console onde jogou conseguem ler.",
                                            "Escolha a pasta do seu Let's Go, Eevee! ou Pikachu! extraído.", "Confira se há uns 6 GB livres e tente de novo.",
                                            "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo."};
         int k = st - SETUP_FAIL_NOT_FOUND;
+        ImGui::PushTextWrapPos(0);
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
+        ImGui::PopTextWrapPos();
     } else {
         ImGui::PushTextWrapPos(0);
         ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
