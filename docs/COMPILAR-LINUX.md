@@ -56,7 +56,8 @@ recompilam em segundos.
 ```
 
 No launcher, clica em **Selecionar pasta do jogo...** e escolhe a pasta com o jogo extraido (a que tem `exefs` e
-`romfs`, ou um `romfs.bin`). Ele confirma se e o Eevee ou o Pikachu, copia os ficheiros para `extracted/`, gera o
+`romfs`, ou um `romfs.bin`) - ou com o proprio `.nsp`, que o programa descompacta. Ele confirma se e o Eevee ou o
+Pikachu, copia os ficheiros para `extracted/`, gera o
 codigo do jogo com o `.venv` e compila-o (com o `clang` do sistema). E o mesmo fluxo da release, com as ferramentas
 de desenvolvimento no lugar do gerador congelado e do Zig. Depois, clica em **Jogar**.
 
