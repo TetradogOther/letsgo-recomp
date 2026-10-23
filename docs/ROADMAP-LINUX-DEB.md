@@ -97,6 +97,7 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | O codigo do jogo compilado com o zig e carregado | ok (as tabelas das quatro modulos; falta o NSO) |
 | O crash e o backtrace | ok (`FATAL: cannot load extracted/exefs/main` + backtrace) |
 | O `.deb` de dentro (`/usr/bin`) | ok (abre, desenha, o icone vem de `/usr/share`) |
+| **O `.deb` instalado no sistema** | ok (Debian 13, `sudo apt install`: o launcher abre com as libs do sistema, o icone, o gerador e o Zig do pacote a correr) |
 | O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
 
 | O `.nsp` descompactado pelo programa | ok (um `.nsp` de mentira: `tools/linux/make_test_nsp.py` + `test_nsp.c`) |
