@@ -99,6 +99,11 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | O `.deb` de dentro (`/usr/bin`) | ok (abre, desenha, o icone vem de `/usr/share`) |
 | O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
 
+| O `.nsp` descompactado pelo programa | ok (um `.nsp` de mentira: `tools/linux/make_test_nsp.py` + `test_nsp.c`) |
+| O `.nsp` em 7z | ok (o `bsdtar` descompacta, o `.nsp` de dentro e lido) |
+| O codigo cifrado | ok (o launcher diz que precisa das chaves da consola) |
+| Os programas lancados pelo nome | ok (o `posix_spawn` nao procura no PATH: corrigido) |
+
 **Falta (precisa dos ficheiros do jogo):**
 
 | # | Teste | Criterio de aceitacao |
@@ -115,16 +120,21 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 
 ### O `.nsp` do utilizador
 
-O ficheiro `Pokemon Let_s Go Eevee base.nsp` (4,2 GB) esta **truncado**: o cabecalho 7z diz que o arquivo precisa de
-4.468.430.335 bytes e tem 4.429.185.024 (faltam 37,4 MB). Alem disso, um `.nsp` **nao e o que o runtime quer**: os
-ficheiros do jogo tem de estar extraidos (a pasta com `exefs` e `romfs`, ou `exefs` e `romfs.bin`).
+O ficheiro `Pokemon Let_s Go Eevee base.nsp` (4,2 GB) tem dois problemas:
 
-- O **RomFS** (os dados do jogo) nao esta cifrado: pode-se extrair do `.nsp` sem chaves.
-- Os **exefs** (o codigo do jogo) estao cifrados com a chave do titulo: precisam das chaves da consola de quem
-  jogou. O projeto (e este port) nao fornece nem ensina a obter chaves.
+1. **Esta truncado**: o cabecalho 7z diz que o arquivo precisa de 4.468.430.335 bytes e tem 4.429.185.024 (faltam
+   37,4 MB). Nao da para o abrir nem para o descompactar.
+2. **O conteudo esta cifrado**: dentro do 7z ha um contentor PFS0 com
+   `1b34ffd5f31b16a437523c5ecda66bac.nca` (4,4 GB), `514bcc037a4aaf9001bf11da737c0dfe.nca` e
+   `470342f2d69c6b0429b8a26fd45cbd69.nca`: e o formato "layered", em que o jogo esta em *content archives*
+   (.nca), cifrados com as chaves da consola. O codigo do jogo (os NSO) vai cifrado com a chave do titulo.
 
-Ou seja: para o teste completo falta (a) um `.nsp` completo e (b) os `exefs` descifrados. Ate la, o port fica
-validado ate ao limite do que se pode testar sem o jogo.
+Por isso o programa descompacta o pacote e, quando encontra ficheiros .nca (ou um NSO com o bit de "cifrado"),
+diz o que falta: *"The game's code is encrypted: it needs your console's keys"* / *"O pacote tem conteudo cifrado
+(.nca): precisa das chaves da consola"*. O projeto (e este port) nao fornece nem ensina a obter chaves.
+
+Ou seja: para o teste completo falta (a) um `.nsp` completo e (b) as chaves da consola de quem jogou (ou um dump
+descifrado). Ate la, o port fica validado ate ao limite do que se pode testar sem o jogo.
 
 
 ## 7. Fase 5 — documentacao (feito)
