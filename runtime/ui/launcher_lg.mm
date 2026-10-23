@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -179,6 +180,12 @@ static void SDLCALL picked_game(void *, const char *const *files, int) {
     snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
     pthread_mutex_unlock(&g_pick_lock);
 }
+static void SDLCALL picked_package(void *, const char *const *files, int) {
+    if (!files || !files[0]) return;
+    pthread_mutex_lock(&g_pick_lock);
+    snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
+    pthread_mutex_unlock(&g_pick_lock);
+}
 static void SDLCALL picked_mod(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
@@ -246,12 +253,18 @@ static void game_files_section(SDL_Window *win) {
         ImGui::PopTextWrapPos();
     } else {
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
-                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs)."));
+        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs), "
+                                 "or the .nsp file itself: the program unpacks it.",
+                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs), "
+                                 "ou o próprio ficheiro .nsp: o programa descompacta-o."));
         ImGui::PopTextWrapPos();
     }
     if (ui_button(T("Select game folder...", "Selecionar pasta do jogo..."), -1))
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
+    // the package with the game inside (.nsp, or a 7z with one): the program unpacks it
+    static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp,7z,xci,zip"}};
+    if (ui_button(T("Select game file (.nsp)...", "Selecionar ficheiro do jogo (.nsp)..."), -1))
+        SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 1, NULL, false);
 }
 
 // ------------------------------------------------------------------ the Mods tab
@@ -510,7 +523,12 @@ extern "C" void launcher_lg_run(const char *root) {
             if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focus_back = true;
         }
         char path[1024];
-        if (take(g_pick_game, path, sizeof path)) setup_start(path);
+        if (take(g_pick_game, path, sizeof path)) {
+            // a file (the package with the game inside) or a folder (the extracted files)
+            struct stat st;
+            if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) setup_start_package(path);
+            else setup_start(path);
+        }
         if (take(g_pick_mod, path, sizeof path)) mod_install_start(path);
         static int last_install;
         int inst = mod_install_state();

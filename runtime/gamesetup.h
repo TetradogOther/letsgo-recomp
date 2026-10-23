@@ -41,6 +41,8 @@ int game_build(const char *exefs);
 const char *game_version(const char *exefs);
 // Starts a setup from the picked folder (NULL: only rebuild the game code from files set up already).
 void setup_start(const char *folder);
+// Starts a setup from a package with the game inside (.nsp, or a 7z with one): the program unpacks it.
+void setup_start_package(const char *path);
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);

@@ -239,8 +239,10 @@ int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_siz
         if (rc != NSP_OK) return rc;
     } else if (got >= 6 && !memcmp(head, "7z\xbc\xaf\x27\x1c", 6)) {
         // a 7z: unpacked with the system's archiver (bsdtar on Linux, tar.exe on Windows)
-        if (plat_unpack(path, out_dir, NULL) != 0) {
-            snprintf(why, why_size, "can't unpack the 7z (it needs bsdtar: the libarchive-tools package)");
+        int r = plat_unpack(path, out_dir, NULL);
+        if (r != 0) {
+            snprintf(why, why_size, r < 0 ? "can't unpack the 7z: bsdtar is not installed (the libarchive-tools package)"
+                                           : "can't unpack the 7z (the file is damaged or incomplete)");
             return NSP_ERR_IO;
         }
         // a .nsp inside it? then that one is the container: its files are copied next to the 7z's ones
