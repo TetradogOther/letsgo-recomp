@@ -55,7 +55,7 @@ fi
 
 if [ "$WITH_ZIG" = 1 ]; then
     echo "==> zig (the compiler of the game code)"
-    ZIG_TARGET=$ZIG_ARCH-linux tools/fetch_zig.sh
+    ZIG_TARGET=$ZIG_ARCH-linux bash tools/fetch_zig.sh
 fi
 
 echo "==> the package tree"
@@ -68,12 +68,13 @@ chmod 755 "$STAGE/usr/bin/letsgo-recomp"
 
 # what the program ships: the generator, the compiler and the headers the game code is built against
 if [ "$WITH_HELPER" = 1 ]; then
-    cp -R "$B/helper/lasgen" "$STAGE/usr/share/letsgo-recomp/"
-    chmod -R a+rX "$STAGE/usr/share/letsgo-recomp/lasgen"
+    cp -a "$B/helper/lasgen" "$STAGE/usr/share/letsgo-recomp/"
+    # the debug symbols of the bundled libraries (unicorn, capstone): the helper doesn't need them
+    find "$STAGE/usr/share/letsgo-recomp/lasgen" \( -name "*.so" -o -name "*.so.*" \) -type f \
+        -exec strip --strip-unneeded {} \; 2>/dev/null || true
 fi
 if [ "$WITH_ZIG" = 1 ]; then
-    cp -R build/zig "$STAGE/usr/share/letsgo-recomp/zig"
-    chmod -R a+rX "$STAGE/usr/share/letsgo-recomp/zig"
+    cp -a build/zig "$STAGE/usr/share/letsgo-recomp/zig"
 fi
 mkdir -p "$STAGE/usr/share/letsgo-recomp/gamelib-src"
 cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c \
@@ -99,10 +100,11 @@ if [ "$WITH_ZIG" = 0 ]; then
 fi
 cp debian/copyright "$STAGE/DEBIAN/copyright"
 gzip -9nc debian/changelog > "$STAGE/DEBIAN/changelog.Debian.gz"
-chmod 644 "$STAGE/DEBIAN/"*
 find "$STAGE" -type d -exec chmod 755 {} +
-find "$STAGE" -type f -exec chmod 644 {} +
+find "$STAGE" -type f -exec chmod 644 {} +   # (the copied programs keep their own mode: cp -a)
 chmod 755 "$STAGE/usr/bin/letsgo-recomp"
+[ -f "$STAGE/usr/share/letsgo-recomp/lasgen/lasgen" ] && chmod 755 "$STAGE/usr/share/letsgo-recomp/lasgen/lasgen"
+[ -f "$STAGE/usr/share/letsgo-recomp/zig/zig" ] && chmod 755 "$STAGE/usr/share/letsgo-recomp/zig/zig"
 
 echo "==> $OUT"
 mkdir -p build/dist
