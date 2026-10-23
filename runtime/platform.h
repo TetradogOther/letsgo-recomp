@@ -54,8 +54,8 @@ int plat_proc_wait(PlatProc p, bool block);  // exit code, or -1 while still run
 void plat_proc_kill(PlatProc p);             // end it and what it started (then it's gone: no wait)
 bool plat_remove_tree(const char *dir);      // rm -rf
 // Unpacks an archive into a folder (bsdtar: .zip, .rar, .7z, .tar and its compressions). 0 = done, else the
-// exit code of the unpacker (or -1 when there is none).
-int plat_unpack(const char *archive, const char *dest);
+// exit code of the unpacker (or -1 when there is none). The unpacker's output goes to log (NULL = nowhere).
+int plat_unpack(const char *archive, const char *dest, const char *log);
 #ifdef _WIN32
 #define PLAT_EXE_SUFFIX ".exe"
 #define PLAT_VENV_PYTHON "venv/Scripts/python.exe"  // relative to the venv's parent

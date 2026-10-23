@@ -191,8 +191,13 @@ static void *install_thread(void *arg) {
     if (!is_dir(src)) {  // an archive: unpacked into mods/.install (bsdtar: .zip, .rar, .7z, .tar)
         rm_tree("mods/.install");
         mkdir("mods/.install", 0755);
-        int r = plat_unpack(src, "mods/.install");
-        if (r != 0) { LOG("[mods] couldn't unpack %s (%d)\n", src, r); g_install_state = MOD_INSTALL_FAIL_UNPACK; goto done; }
+        int r = plat_unpack(src, "mods/.install", "mods/.install.log");
+        if (r != 0) {
+            LOG("[mods] couldn't unpack %s (%d, mods/.install.log)\n", src, r);
+            g_install_state = MOD_INSTALL_FAIL_UNPACK;
+            goto done;
+        }
+        remove("mods/.install.log");
         root = "mods/.install";
     }
     {

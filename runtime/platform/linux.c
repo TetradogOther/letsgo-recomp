@@ -272,13 +272,13 @@ bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPT
 
 // An archive: bsdtar (libarchive, the package libarchive-tools: .zip, .rar, .7z, .tar and its compressions - the
 // same libarchive the Windows build unpacks with), then the system's tar (GNU: .tar and its compressions).
-int plat_unpack(const char *archive, const char *dest) {
+int plat_unpack(const char *archive, const char *dest, const char *log) {
     const char *bsdtar[] = {"bsdtar", "-xf", archive, "-C", dest, NULL};
-    PlatProc p = plat_spawn(bsdtar, NULL, false);
+    PlatProc p = plat_spawn(bsdtar, log, false);
     int r = p ? plat_proc_wait(p, true) : -1;  // (-1: bsdtar isn't installed)
     if (r == 0) return 0;
     const char *tar[] = {"tar", "-xf", archive, "-C", dest, NULL};
-    p = plat_spawn(tar, NULL, false);
+    p = plat_spawn(tar, log, false);
     if (p) {
         int r2 = plat_proc_wait(p, true);
         if (r2 == 0) return 0;

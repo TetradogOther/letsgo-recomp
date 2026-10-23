@@ -435,12 +435,12 @@ bool plat_remove_tree(const char *dir) {
 }
 
 // An archive: Windows' own tar (libarchive: .zip, .rar, .7z, .tar and its compressions).
-int plat_unpack(const char *archive, const char *dest) {
+int plat_unpack(const char *archive, const char *dest, const char *log) {
     char tar[600];
     const char *sys = getenv("SystemRoot");
     snprintf(tar, sizeof tar, "%s\\System32\\tar.exe", sys ? sys : "C:\\Windows");
     const char *argv[] = {tar, "-xf", archive, "-C", dest, NULL};
-    PlatProc p = plat_spawn(argv, NULL, false);
+    PlatProc p = plat_spawn(argv, log, false);
     return p ? plat_proc_wait(p, true) : -1;
 }
 

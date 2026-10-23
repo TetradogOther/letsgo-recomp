@@ -233,7 +233,7 @@ static bool fetch_tool(void) {
         remove(zip);
         return false;
     }
-    r = plat_unpack(zip, TOOL_DIR);
+    r = plat_unpack(zip, TOOL_DIR, TOOL_DIR "/unpack.log");
     remove(zip);
     if (r != 0 || !is_file(exe)) { LOG("[ui2x] couldn't unpack the upscaler (%d)\n", r); return false; }
     remove(TOOL_DIR "/download.log");
