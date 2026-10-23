@@ -14,9 +14,19 @@
 # Turbo (padrão): LARECOMP_FPS=0, sem a trava de 30 fps. A lógica anda um passo por quadro, então os mesmos quadros
 # chegam ~4x mais rápido e os scripts (contados em quadros) valem igual: cenário, câmera e posições saem idênticos; só
 # animações de espera ligadas ao tempo real ficam em outra fase. TURBO=0 volta ao ritmo real (medir fps, áudio).
+#
+# Linux: o mesmo script, sem o RenderDoc (que é só Windows) e com o grupo de processos do jogo terminado no fim.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT) WINDOWS=1 ;;
+    *) WINDOWS=0 ;;
+esac
+[ "$WINDOWS" = 1 ] && export PATH="/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH"
+EXE=${EXE:-./build/lasrecomp}
+[ "$WINDOWS" = 1 ] && EXE=${EXE%.exe}.exe
+PY=./.venv/Scripts/python
+[ "$WINDOWS" = 0 ] && { PY=./.venv/bin/python; [ -x "$PY" ] || PY=python3; }
 
 name=${1:?nome do teste}
 shots=${2:-1400}
@@ -32,15 +42,16 @@ else cp -r "${SAVE:-save}"/* build/test-save/; fi
 
 last=${shots##*,}
 start=$(date +%s)
+[ "$WINDOWS" = 0 ] && set -m   # (job control: the game gets its own process group, ended at the end)
 (   # the game itself is this background process (exec, no env wrapper): its Windows pid is the one killed below
     [ "${TURBO:-1}" = 0 ] || export LARECOMP_FPS=0
     export LARECOMP_INPUT="400:A:6,500:A:6,1150:A:6,1300:A:6" LARECOMP_NO_USER_INPUT=1 \
         LARECOMP_SAVE_DIR=build/test-save LARECOMP_NO_AUDIO=1 LARECOMP_SHOT_AT="$shots"
     for kv in "$@"; do export "$kv"; done
     if [ -n "${RENDERDOC:-}" ]; then  # under RenderDoc: LARECOMP_RENDERDOC_AT=<frame> picks the frame (build/rdc/)
-        exec "/c/Program Files/RenderDoc/renderdoccmd.exe" capture -w -d "$(cygpath -w "$PWD")" ./build/lasrecomp.exe extracted --play             > "logs/repro-$name.log" 2>&1
+        exec "/c/Program Files/RenderDoc/renderdoccmd.exe" capture -w -d "$(cygpath -w "$PWD")" "$EXE" extracted --play             > "logs/repro-$name.log" 2>&1
     fi
-    exec "${EXE:-./build/lasrecomp.exe}" extracted --play > "logs/repro-$name.log" 2>&1
+    exec "$EXE" extracted --play > "logs/repro-$name.log" 2>&1
 ) &
 pid=$!
 last_png=$(printf "build/frames/frame_%05d.png" "$last")
@@ -58,14 +69,19 @@ if [ -n "${RENDERDOC:-}" ]; then  # the capture is written in the background: wa
     done
     ls -la build/rdc/
 fi
-winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
-if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; else kill "$pid" 2>/dev/null || true; fi
-# The runtime re-executes itself when the guest address range is taken (runtime/main.c reserve_guest_space): the game
-# is then outside the killed tree. Stop the copies of this exe started since this test began - never older ones (the
-# player's game).
-exe_win=$(cygpath -w "$(realpath "${EXE:-./build/lasrecomp.exe}")")
-powershell.exe -NoProfile -Command "\$t = [DateTimeOffset]::FromUnixTimeSeconds($start).LocalDateTime; Get-CimInstance Win32_Process -Filter \"Name='lasrecomp.exe'\" | Where-Object { \$_.ExecutablePath -eq '$exe_win' -and \$_.CreationDate -ge \$t } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
+if [ "$WINDOWS" = 1 ]; then
+    winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || true)
+    if [ -n "$winpid" ]; then taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true; else kill "$pid" 2>/dev/null || true; fi
+    # The runtime re-executes itself when the guest address range is taken (runtime/main.c reserve_guest_space): the game
+    # is then outside the killed tree. Stop the copies of this exe started since this test began - never older ones (the
+    # player's game).
+    exe_win=$(cygpath -w "$(realpath "$EXE")")
+    powershell.exe -NoProfile -Command "\$t = [DateTimeOffset]::FromUnixTimeSeconds($start).LocalDateTime; Get-CimInstance Win32_Process -Filter \"Name='lasrecomp.exe'\" | Where-Object { \$_.ExecutablePath -eq '$exe_win' -and \$_.CreationDate -ge \$t } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
+else
+    # the same, with the group of processes (the game re-executes itself: its children stay in the group)
+    kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+fi
 wait "$pid" 2>/dev/null || true
 cp build/frames/*.png "build/repro/$name/" 2>/dev/null || true
-FFMPEG=ffmpeg ./.venv/Scripts/python tools/contact_sheet.py "build/repro/$name/contact.png" build/repro/"$name"/frame_*.png >/dev/null
+FFMPEG=ffmpeg "$PY" tools/contact_sheet.py "build/repro/$name/contact.png" build/repro/"$name"/frame_*.png >/dev/null
 echo "build/repro/$name/contact.png"
