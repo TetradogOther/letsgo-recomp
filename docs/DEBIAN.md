@@ -28,6 +28,11 @@ letsgo-recomp
 No launcher, clica em **Selecionar pasta do jogo...** e escolhe a pasta com a tua copia extraida (a que tem `exefs` e
 `romfs`, ou um `romfs.bin`).
 
+Tambem pode ser o proprio `.nsp` (ou um `.7z` com ele dentro): o programa descompacta-o (o contentor nao esta
+cifrado, por isso nao sao preciso chaves) e continua como se tivesses dado a pasta dos ficheiros extraidos. Se o
+codigo do jogo estiver cifrado (as chaves da consola), o launcher avisa: nesse caso so as chaves de quem jogou
+conseguem ler.
+
 A primeira vez, o launcher:
 
 1. copia os ficheiros do jogo para a tua pasta de dados;
