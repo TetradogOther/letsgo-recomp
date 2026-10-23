@@ -1,0 +1,38 @@
+name: Debian package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  deb:
+    name: the .deb (Debian 13)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            clang lld make pkg-config python3 python3-venv python3-pip \
+            libsdl3-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+            libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
+            libarchive-tools curl ca-certificates file dpkg-dev
+
+      - name: the package
+        run: bash tools/linux/build_deb.sh
+
+      - name: what it holds
+        run: |
+          dpkg-deb --info build/dist/*.deb
+          dpkg-deb --contents build/dist/*.deb | head -40
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: letsgo-recomp-deb
+          path: build/dist/*.deb
+          if-no-files-found: error
