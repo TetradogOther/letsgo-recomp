@@ -234,6 +234,25 @@ void plat_crash_handler_install(void) {
 #include <sys/wait.h>
 extern char **environ;
 
+// posix_spawn does not look in the PATH (it has execve's rules, not execvp's): the programs by name are found here.
+static const char *find_in_path(const char *prog, char *buf, size_t n) {
+    if (strchr(prog, '/')) return prog;  // (a path: as it is)
+    const char *path = getenv("PATH");
+    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+    const char *p = path;
+    while (*p) {
+        const char *e = strchr(p, ':');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len && len + strlen(prog) + 2 < n) {
+            snprintf(buf, n, "%.*s/%s", (int)len, p, prog);
+            if (access(buf, X_OK) == 0) return buf;
+        }
+        if (!e) break;
+        p = e + 1;
+    }
+    return NULL;
+}
+
 PlatProc plat_spawn(const char *const argv[], const char *log_path, bool append_log) {
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
@@ -245,7 +264,15 @@ PlatProc plat_spawn(const char *const argv[], const char *log_path, bool append_
     posix_spawnattr_setflags(&at, POSIX_SPAWN_SETPGROUP);
     posix_spawnattr_setpgroup(&at, 0);
     pid_t pid;
-    int rc = posix_spawn(&pid, argv[0], &fa, &at, (char *const *)argv, environ);
+    char found[4096];
+    const char *prog = find_in_path(argv[0], found, sizeof found);
+    if (!prog) {
+        posix_spawnattr_destroy(&at);
+        posix_spawn_file_actions_destroy(&fa);
+        fprintf(stderr, "[plat] %s not found in the PATH\n", argv[0]);
+        return 0;
+    }
+    int rc = posix_spawn(&pid, prog, &fa, &at, (char *const *)argv, environ);
     posix_spawnattr_destroy(&at);
     posix_spawn_file_actions_destroy(&fa);
     return rc ? 0 : (PlatProc)pid;

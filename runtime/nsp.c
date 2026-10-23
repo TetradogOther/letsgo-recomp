@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>  // strcasecmp
 #include <sys/stat.h>
 
 #include "platform.h"
@@ -168,6 +169,26 @@ static bool find_exefs(const char *dir, char *out, size_t n, int depth) {
     return found;
 }
 
+// A content archive (.nca)? the "layered" packages hold the game in them, encrypted with the console's keys
+static bool has_nca(const char *dir, int depth) {
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    struct dirent *e;
+    bool found = false;
+    while (!found && (e = readdir(d))) {
+        const char *n = e->d_name;
+        size_t len = strlen(n);
+        if (len > 4 && !strcasecmp(n + len - 4, ".nca")) { found = true; break; }
+        if (depth < 2) {
+            char p[1024];
+            snprintf(p, sizeof p, "%s/%s", dir, n);
+            if (n[0] != '.' && is_dir(p)) found = has_nca(p, depth + 1);
+        }
+    }
+    closedir(d);
+    return found;
+}
+
 bool nsp_find_exefs(const char *dir, char *out, size_t n) { return find_exefs(dir, out, n, 0); }
 
 // Copies a file or a folder (the game's parts that were in the package)
@@ -265,8 +286,16 @@ int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_siz
 
     // the game's code: encrypted with the title key? then it is of no use without the console's keys
     char ex[1024];
-    if (find_exefs(out_dir, ex, sizeof ex, 0) && code_encrypted(ex)) {
-        snprintf(why, why_size, "the game's code is encrypted (it needs the console's keys)");
+    if (find_exefs(out_dir, ex, sizeof ex, 0)) {
+        if (code_encrypted(ex)) {
+            snprintf(why, why_size, "the game's code is encrypted (it needs the console's keys)");
+            return NSP_ERR_ENCRYPTED;
+        }
+        return NSP_OK;
+    }
+    // no exefs: a "layered" package? the game is inside content archives (.nca), encrypted with the console's keys
+    if (has_nca(out_dir, 0)) {
+        snprintf(why, why_size, "the package holds encrypted content (.nca): it needs the console's keys");
         return NSP_ERR_ENCRYPTED;
     }
     return NSP_OK;

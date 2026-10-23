@@ -54,16 +54,25 @@ def main():
         return 1
     out = sys.argv[1]
     encrypted = "--encrypted" in sys.argv
-    files = [
-        ("main", nso(encrypted)),
-        ("main.npdm", npdm()),
-        ("rtld", nso(encrypted)),
-        ("sdk", nso(encrypted)),
-        ("subsdk0", nso(encrypted)),
-        ("subsdk1", nso(encrypted)),
-        ("romfs.bin", b"ROMFS" + b"\0" * 4092),
-        ("English", b"language" * 64),
-    ]
+    layered = "--layered" in sys.argv
+    if layered:
+        # a "layered" package: the game is inside content archives (.nca), encrypted with the console's keys
+        files = [
+            ("54f05545f49ff824ac7cc426bd0d5026.cnmt.xml", b"<meta/>" * 64),
+            ("1b34ffd5f31b16a437523c5ecda66bac.nca", b"\0" * 4096),
+            ("514bcc037a4aaf9001bf11da737c0dfe.nca", b"\0" * 512),
+        ]
+    else:
+        files = [
+            ("main", nso(encrypted)),
+            ("main.npdm", npdm()),
+            ("rtld", nso(encrypted)),
+            ("sdk", nso(encrypted)),
+            ("subsdk0", nso(encrypted)),
+            ("subsdk1", nso(encrypted)),
+            ("romfs.bin", b"ROMFS" + b"\0" * 4092),
+            ("English", b"language" * 64),
+        ]
     with open(out, "wb") as f:
         f.write(pfs0(files))
     print("%s: %d bytes%s" % (out, os.path.getsize(out), " (encrypted)" if encrypted else ""))

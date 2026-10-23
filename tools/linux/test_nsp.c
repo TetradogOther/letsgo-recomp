@@ -41,6 +41,13 @@ int main(int argc, char **argv) {
 
     int rc = nsp_extract(path, out, why, sizeof why);
     printf("nsp_extract: %d (%s)\n", rc, why);
+    if (rc == NSP_ERR_ENCRYPTED) {
+        // an encrypted package: the files may be out, but the runtime must say the keys are needed
+        check(strstr(why, "keys") != NULL, "the message says the keys are needed");
+        printf("%s\n", fails ? "NOT OK" : "OK");
+        return fails ? 1 : 0;
+    }
+    check(rc == NSP_OK, "the package was unpacked");
     char p[1200];
     snprintf(p, sizeof p, "%s/main", out);
     check(is_file(p), "the exefs' main is out");
@@ -53,11 +60,6 @@ int main(int argc, char **argv) {
     // the exefs' folder, where the runtime looks for the code
     char ex[1024];
     check(nsp_find_exefs(out, ex, sizeof ex), "the exefs' folder is found");
-    // the encrypted one: the runtime must say so
-    snprintf(out, sizeof out, "/tmp/test_nsp_out2");
-    system("rm -rf /tmp/test_nsp_out2");
-    rc = nsp_extract(path, out, why, sizeof why);
-    check(rc == NSP_OK || rc == NSP_ERR_ENCRYPTED, "the result is one of the two");
     printf("%s\n", fails ? "NOT OK" : "OK");
     return fails ? 1 : 0;
 }
