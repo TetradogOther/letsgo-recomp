@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (Linux / Debian port)
+
+The runtime now builds and runs on Linux, and there is a Debian package. The game itself has not been played through
+on Linux yet (it needs the player's own game files); see [docs/ROADMAP-LINUX-DEB.md](docs/ROADMAP-LINUX-DEB.md).
+
+- **The runtime builds on Linux** (Debian 13, Ubuntu 24.04): the code that only compiled on Windows was fixed (the
+  missing includes, `SDL_LoadPNG` / `SDL_SavePNG` - which needed SDL3_image, a dependency nothing declared - now go
+  through the stb_image copy the project already ships, the FidelityFX header's `__declspec` outside MSVC), the
+  linker is no longer forced to be `lld` (`make LD=`), and the SDL3 of the distribution (which leaves libudev's symbols
+  unresolved) links with `--allow-shlib-undefined`.
+- **A Debian package** (`tools/linux/build_deb.sh`): the runtime, the game code generator (frozen with PyInstaller),
+  the Zig compiler the game code is built with on the player's machine, the headers it is built against, the window
+  icon, the start screen font, the menu entry and the man page. The game's files are not in it. [docs/DEBIAN.md](docs/DEBIAN.md).
+- **Mods install on Linux** (they called the Windows' own `tar.exe`): the archive is unpacked with `bsdtar` (libarchive:
+  `.zip`, `.rar`, `.7z`) or, failing that, with the system's `tar`.
+- **The 2x interface on Linux**: the upscaler (nihui's waifu2x-ncnn-vulkan) is downloaded from its Linux release and
+  unpacked the same way.
+- **The display's refresh rate on Linux**: it was unknown outside Windows (the frame generation's "Auto" assumed
+  60 Hz); it is now read from the display's mode (SDL), so the multiplier follows the screen.
+
 ## 0.6.0 (2026-10-22)
 
 Iván Serrano's ([@Vancete](https://github.com/Vancete), PRs #17 and #19): the in-house frame generation, SSAO Ultra,

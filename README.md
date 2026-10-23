@@ -51,7 +51,7 @@ In the game, **F12** opens the same settings, applied at once:
 
 | | |
 |---|---|
-| OS | Windows 10 or 11, 64-bit |
+| OS | Windows 10 or 11, 64-bit; **Linux (Debian 13 / Ubuntu 24.04, 64-bit: experimental)** |
 | CPU | x86-64 with AVX2, FMA and BMI2 (Intel Haswell / AMD Zen or newer) |
 | GPU | Vulkan 1.3 |
 | RAM | about 4 GB while playing (5.2 GB during the one-time setup) |
@@ -77,6 +77,20 @@ Most tested with *Eevee* 1.0.0; *Pikachu* 1.0.0 less.
 
 Everything stays in that folder (settings, saves, mods). To update, unzip a new release over it. For both games, use
 one folder each.
+
+### On Linux (experimental)
+
+A Debian package is built from this repository (`tools/linux/build_deb.sh`): the runtime, the game code generator, the
+compiler the game code is built with, the window icon and the start screen font. No game files.
+
+```bash
+sudo apt install ./letsgo-recomp_0.6.0_amd64.deb
+```
+
+It installs **Let's Go Recomp** in the applications menu; everything it writes stays in
+`$XDG_DATA_HOME/letsgo-recomp` (`~/.local/share/letsgo-recomp`). [docs/DEBIAN.md](docs/DEBIAN.md) has the details and
+what does not work there yet (FSR 3.1, the frame generation's alignment with the screen); to build from the source
+instead, [docs/COMPILAR-LINUX.md](docs/COMPILAR-LINUX.md).
 
 ## Mods
 
