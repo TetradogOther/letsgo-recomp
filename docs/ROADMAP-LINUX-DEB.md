@@ -100,9 +100,6 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | **O `.deb` instalado no sistema** | ok (Debian 13, `sudo apt install`: o launcher abre com as libs do sistema, o icone, o gerador e o Zig do pacote a correr) |
 | O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
 
-| O `.nsp` descompactado pelo programa | ok (um `.nsp` de mentira: `tools/linux/make_test_nsp.py` + `test_nsp.c`) |
-| O `.nsp` em 7z | ok (o `bsdtar` descompacta, o `.nsp` de dentro e lido) |
-| O codigo cifrado | ok (o launcher pede as chaves e o hactool, e descifra com eles: a orquestracao esta testada com um hactool de mentira; o hactool a serio nao vem no pacote - politica do Debian) |
 | Os programas lancados pelo nome | ok (o `posix_spawn` nao procura no PATH: corrigido) |
 
 **Falta (precisa dos ficheiros do jogo):**
@@ -119,23 +116,15 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | 4.8 | regressao Windows | o build do Windows continua a passar (`make runtime-objs` em MSYS2) — as correcoes da Fase 0 sao partilhadas |
 | 4.9 | `smoketest` | `tools/linux/smoketest.sh` (ja existe: o launcher + o log); falta a parte do jogo, com um save de teste |
 
-### O `.nsp` do utilizador
+### Os ficheiros do jogo
 
-O ficheiro `Pokemon Let_s Go Eevee base.nsp` (4,2 GB) tem dois problemas:
+O port fica com o fluxo do Windows: a pasta com os ficheiros **extraidos** (o `exefs/` e o `romfs`), que o
+utilizador traz da sua propria consola (TegraExplorer → `hactool`, com as chaves da consola). O port nao le chaves
+nem descompacta `.nsp` — como no projeto original.
 
-1. **Esta truncado**: o cabecalho 7z diz que o arquivo precisa de 4.468.430.335 bytes e tem 4.429.185.024 (faltam
-   37,4 MB). Nao da para o abrir nem para o descompactar.
-2. **O conteudo esta cifrado**: dentro do 7z ha um contentor PFS0 com
-   `1b34ffd5f31b16a437523c5ecda66bac.nca` (4,4 GB), `514bcc037a4aaf9001bf11da737c0dfe.nca` e
-   `470342f2d69c6b0429b8a26fd45cbd69.nca`: e o formato "layered", em que o jogo esta em *content archives*
-   (.nca), cifrados com as chaves da consola. O codigo do jogo (os NSO) vai cifrado com a chave do titulo.
-
-Por isso o programa descompacta o pacote e, quando encontra ficheiros .nca (ou um NSO com o bit de "cifrado"),
-diz o que falta: *"The game's code is encrypted: it needs your console's keys"* / *"O pacote tem conteudo cifrado
-(.nca): precisa das chaves da consola"*. O projeto (e este port) nao fornece nem ensina a obter chaves.
-
-Ou seja: para o teste completo falta (a) um `.nsp` completo e (b) as chaves da consola de quem jogou (ou um dump
-descifrado). Ate la, o port fica validado ate ao limite do que se pode testar sem o jogo.
+O `.nsp` que o utilizador tem (`Pokemon Let_s Go Eevee base.nsp`, 4,2 GB) esta, alem disso, truncado (faltam
+37,4 MB) e cifrado (o formato "layered": o jogo dentro de *content archives* .nca, cifrados com as chaves da
+consola) — por isso nao serve para o teste sem as chaves e sem um volcado completo.
 
 
 ## 7. Fase 5 — documentacao (feito)

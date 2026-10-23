@@ -12,7 +12,6 @@ extern "C" {
 enum {
     SETUP_IDLE,         // nothing running
     SETUP_LOOKING,      // looking for the game files in the picked folder
-    SETUP_UNPACKING,    // unpacking a package (.nsp, .7z) with the game inside
     SETUP_COPYING,      // copying exefs / the RomFS image
     SETUP_IMAGE,        // building the RomFS image from romfs/
     SETUP_READING,      // generator: translating the game code
@@ -21,8 +20,6 @@ enum {
     SETUP_DONE,         // ready to play
     // failures (setup_state)
     SETUP_FAIL_NOT_FOUND,   // no exefs/main + romfs in that folder
-    SETUP_FAIL_PACKAGE,     // .xci / .nsp found instead of extracted files
-    SETUP_FAIL_ENCRYPTED,   // the package's code is encrypted (it needs the console's keys)
     SETUP_FAIL_VERSION,     // not Let's Go, Eevee! / Pikachu! (main.npdm's program id)
     SETUP_FAIL_COPY,        // disk full / unreadable files
     SETUP_FAIL_BUILD,       // the game code didn't build
@@ -41,10 +38,6 @@ int game_build(const char *exefs);
 const char *game_version(const char *exefs);
 // Starts a setup from the picked folder (NULL: only rebuild the game code from files set up already).
 void setup_start(const char *folder);
-// Starts a setup from a package with the game inside (.nsp, or a 7z with one): the program unpacks it.
-void setup_start_package(const char *path);
-// Starts a setup from a package whose code is encrypted: it is decrypted with the user's keys and hactool.
-void setup_start_decrypt(const char *path, const char *keys, const char *hactool);
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);

@@ -17,7 +17,6 @@
 #include "gamebuild.h"
 #include "gamelib.h"
 #include "hle.h"
-#include "nsp.h"
 #include "paths.h"
 #include "platform.h"
 #include "romfs_build.h"
@@ -34,9 +33,6 @@ static _Atomic int g_state;
 static _Atomic float g_progress;
 static _Atomic bool g_running;
 static char g_folder[1024];
-static char g_package[1024];    // (a package with the game inside: .nsp, .7z)
-static char g_keys[1024], g_hactool[1024];  // (the keys and hactool, to decrypt it: the user's own console's)
-static char g_unpacked[1024];  // (the folder the package was unpacked into: removed when the files are copied)
 
 int setup_state(void) { return g_state; }
 float setup_progress(void) { return g_progress; }
@@ -115,12 +111,7 @@ bool setup_ready(void) {
     return game_ok(ROOT "/exefs") && is_file(ROOT "/romfs.bin") && gamelib_present(ROOT);
 }
 
-typedef struct {
-    char exefs[1024], romfs[1024], romfs_bin[1024];
-    bool package;                 // (a package with the game inside was found)
-    char package_path[1024];      // (the .nsp: the one the program unpacks)
-    char package_7z[1024];        // (a 7z with a .nsp inside: only if there is no .nsp)
-} Found;
+typedef struct { char exefs[1024], romfs[1024], romfs_bin[1024]; } Found;
 
 static void find_game(const char *dir, int depth, Found *f) {
     if (depth > 5 || (f->exefs[0] && (f->romfs[0] || f->romfs_bin[0]))) return;
@@ -141,19 +132,6 @@ static void find_game(const char *dir, int depth, Found *f) {
     for (struct dirent *e; (e = readdir(d));) {
         const char *n = e->d_name;
         if (n[0] == '.') continue;
-        size_t len = strlen(n);
-        if (len > 4) {
-            char ext[5];
-            for (int i = 0; i < 4; i++) ext[i] = (char)tolower((unsigned char)n[len - 4 + i]);
-            ext[4] = 0;
-            // a package with the game inside: the program unpacks it (.nsp first, then a 7z with one inside)
-            if (!strcmp(ext, ".nsp"))
-                f->package = true, snprintf(f->package_path, sizeof f->package_path, "%s/%s", dir, n);
-            else if (!strcmp(ext, ".7z"))
-                f->package = true, snprintf(f->package_7z, sizeof f->package_7z, "%s/%s", dir, n);
-            else if (!strcmp(ext, ".xci") || !strcmp(ext, ".nca") || !strcmp(ext, ".nsz") || !strcmp(ext, ".xcz"))
-                f->package = true;
-        }
         snprintf(p, sizeof p, "%s/%s", dir, n);
         if (nsub < 64 && strcmp(n, "bin") && is_dir(p)) snprintf(sub[nsub++], sizeof sub[0], "%s", n);
     }
@@ -162,8 +140,6 @@ static void find_game(const char *dir, int depth, Found *f) {
         snprintf(p, sizeof p, "%s/%s", dir, sub[i]);
         find_game(p, depth + 1, f);
     }
-    if (!f->package_path[0] && f->package_7z[0])  // (no .nsp: the 7z, if any)
-        snprintf(f->package_path, sizeof f->package_path, "%s", f->package_7z);
 }
 
 // progress: copying + the image are the first 15%, the game code the rest
@@ -200,49 +176,17 @@ static bool path_inside(const char *folder, const char *path) {
 static void *setup_thread(void *arg) {
     (void)arg;
     g_progress = 0;
-    if (!g_folder[0] && !g_package[0]) {  // only the game code (files set up already, e.g. a new version of the app)
+    if (!g_folder[0]) {  // only the game code (files set up already, e.g. a new version of the app)
         if (build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
         g_running = false;
         return NULL;
     }
     g_state = SETUP_LOOKING;
     Found f = {0};
-    if (g_package[0]) {  // the package was picked directly (the file dialog)
-        f.package = true;
-        snprintf(f.package_path, sizeof f.package_path, "%s", g_package);
-        LOG("[setup] %s\n", f.package_path);
-    } else {
-        find_game(g_folder, 0, &f);
-        LOG("[setup] %s: exefs %s, romfs %s, romfs.bin %s\n", g_folder, f.exefs[0] ? f.exefs : "-", f.romfs[0] ? f.romfs : "-",
-            f.romfs_bin[0] ? f.romfs_bin : "-");
-    }
-    if (f.package && f.package_path[0]) {
-        // a package with the game inside (.nsp, .7z): the program unpacks it (the container is not encrypted)
-        g_state = SETUP_UNPACKING;
-        char dir[1100], why[256] = "";
-        snprintf(dir, sizeof dir, "%s/.nsp", rt_data_root());
-        plat_remove_tree(dir);
-        mkdir(dir, 0755);
-        int rc = g_keys[0] ? nsp_decrypt(f.package_path, g_keys, g_hactool, dir, why, sizeof why)
-                            : nsp_extract(f.package_path, dir, why, sizeof why);
-        if (rc != NSP_OK) {
-            LOG("[setup] %s: %s\n", f.package_path, why);
-            g_state = rc == NSP_ERR_ENCRYPTED ? SETUP_FAIL_ENCRYPTED : SETUP_FAIL_PACKAGE;
-            g_running = false;
-            return NULL;
-        }
-        // look again, in what was unpacked
-        Found u = {0};
-        find_game(dir, 0, &u);
-        if (u.exefs[0]) snprintf(f.exefs, sizeof f.exefs, "%s", u.exefs);
-        if (u.romfs[0]) snprintf(f.romfs, sizeof f.romfs, "%s", u.romfs);
-        if (u.romfs_bin[0]) snprintf(f.romfs_bin, sizeof f.romfs_bin, "%s", u.romfs_bin);
-        LOG("[setup] %s unpacked: exefs %s, romfs %s, romfs.bin %s\n", f.package_path, f.exefs[0] ? f.exefs : "-",
-            f.romfs[0] ? f.romfs : "-", f.romfs_bin[0] ? f.romfs_bin : "-");
-        // the unpacked files are copied below; the package itself is not needed any more
-        snprintf(g_unpacked, sizeof g_unpacked, "%s", dir);
-    }
-    if (!f.exefs[0] || (!f.romfs[0] && !f.romfs_bin[0])) g_state = f.package ? SETUP_FAIL_PACKAGE : SETUP_FAIL_NOT_FOUND;
+    find_game(g_folder, 0, &f);
+    LOG("[setup] %s: exefs %s, romfs %s, romfs.bin %s\n", g_folder, f.exefs[0] ? f.exefs : "-", f.romfs[0] ? f.romfs : "-",
+        f.romfs_bin[0] ? f.romfs_bin : "-");
+    if (!f.exefs[0] || (!f.romfs[0] && !f.romfs_bin[0])) g_state = SETUP_FAIL_NOT_FOUND;
     else if (!game_ok(f.exefs)) g_state = SETUP_FAIL_VERSION;
     else {
         // (the picked folder can't be our own copy: setting up again deletes that first)
@@ -286,10 +230,6 @@ static void *setup_thread(void *arg) {
     if (!ok) g_state = SETUP_FAIL_COPY;
     else if (build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
     LOG("[setup] %s\n", g_state == SETUP_DONE ? "ready" : "failed");
-    if (g_unpacked[0]) {  // (the package's files are copied: the unpacked copy is not needed any more)
-        plat_remove_tree(g_unpacked);
-        g_unpacked[0] = 0;
-    }
     g_running = false;
     return NULL;
 }
@@ -298,36 +238,6 @@ void setup_start(const char *folder) {
     if (g_running) return;
     snprintf(g_folder, sizeof g_folder, "%s", folder ? folder : "");
     for (char *c = g_folder; *c; c++) if (*c == '\\') *c = '/';
-    g_package[0] = 0;
-    g_running = true;
-    g_state = SETUP_LOOKING;
-    pthread_t t;
-    pthread_create(&t, NULL, setup_thread, NULL);
-    pthread_detach(t);
-}
-
-// A package whose code is encrypted: it is decrypted with the user's keys and their hactool (runtime/nsp.c), and
-// the setup goes on with the files that come out.
-void setup_start_decrypt(const char *path, const char *keys, const char *hactool) {
-    if (g_running) return;
-    snprintf(g_package, sizeof g_package, "%s", path ? path : "");
-    snprintf(g_keys, sizeof g_keys, "%s", keys ? keys : "");
-    snprintf(g_hactool, sizeof g_hactool, "%s", hactool ? hactool : "");
-    for (char *c = g_package; *c; c++) if (*c == '\\') *c = '/';
-    g_folder[0] = 0;
-    g_running = true;
-    g_state = SETUP_LOOKING;
-    pthread_t t;
-    pthread_create(&t, NULL, setup_thread, NULL);
-    pthread_detach(t);
-}
-
-// A package with the game inside (.nsp, .7z): the program unpacks it (runtime/nsp.c) and goes on with the files.
-void setup_start_package(const char *path) {
-    if (g_running) return;
-    snprintf(g_package, sizeof g_package, "%s", path ? path : "");
-    for (char *c = g_package; *c; c++) if (*c == '\\') *c = '/';
-    g_folder[0] = 0;
     g_running = true;
     g_state = SETUP_LOOKING;
     pthread_t t;

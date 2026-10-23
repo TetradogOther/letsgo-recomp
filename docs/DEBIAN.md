@@ -28,21 +28,20 @@ letsgo-recomp
 No launcher, clica em **Selecionar pasta do jogo...** e escolhe a pasta com a tua copia extraida (a que tem `exefs` e
 `romfs`, ou um `romfs.bin`).
 
-Tambem pode ser o proprio `.nsp` (ou um `.7z` com ele dentro): o programa descompacta-o (o contentor nao esta
-cifrado, por isso nao sao preciso chaves) e continua como se tivesses dado a pasta dos ficheiros extraidos.
+### Como obter essa pasta
 
-### Se o codigo do jogo estiver cifrado
+O programa nao descompacta `.nsp` nem le chaves: a pasta tem de estar extraida (como no Windows). Com a tua
+propria consola:
 
-O codigo do jogo (os NSO) vai cifrado com as chaves da consola. Quando o launcher lo detecta, pede:
+1. **TegraExplorer** (homebrew) na Switch: *Dumping* → o titulo instalado → um `.nsp`; e *Keys* → o
+   `keys.dat` / `prod.keys` da **tua** consola.
+2. No PC, **`hactool`** ([SciresM/hactool](https://github.com/SciresM/hactool); no Linux, o dos repositorios
+   NixOS/AUR/openSUSE ou compilado da fonte) com essas chaves, para extrair o `exefs/` (descifrado) e o
+   `romfs.bin`.
+3. Escolhes essa pasta no launcher e o resto faz-se sozinho (copia, imagem do RomFS, geracao do codigo do jogo,
+   compilacao).
 
-1. **o ficheiro de chaves** da tua consola (o `keys.dat` ou o `prod.keys` que extraiste dela);
-2. **o `hactool`** (o programa que le as chaves e descifra o conteudo) — o caminho dele, ou `hactool` no PATH.
-
-E entao descifra o pacote e segue com o set up como se tivesses dado a pasta dos ficheiros.
-
-O `hactool` nao vem no pacote (a politica do Debian nao aceita ferramentas de contornamento dentro de um pacote):
-usa o binario do Windows de [SciresM/hactool](https://github.com/SciresM/hactool) ou, no Linux, o dos repositorios
-(NixOS, AUR, openSUSE) ou compilado da fonte. As chaves sao **da tua consola** — nao se descarregam de lado nenhum.
+As chaves e o ficheiro do jogo sao **teus**: nao vem com o pacote e nao se descarregam de lado nenhum.
 
 A primeira vez, o launcher:
 

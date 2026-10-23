@@ -27,7 +27,6 @@
 
 extern "C" {
 #include "gamesetup.h"
-#include "nsp.h"
 #include "rt.h"
 #include "input_bind.h"
 #include "mods.h"
@@ -176,29 +175,10 @@ static void ui2x_section(bool ready, bool *on) {
 // ------------------------------------------------------------------ file dialogs (SDL calls back on any thread)
 static pthread_mutex_t g_pick_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_pick_game[1024], g_pick_mod[1024];
-static char g_package[1024];  // (the package the setup was given: its password can be tried again)
-static char g_pick_keys[1024];  // (the keys file the user picked: their console's)
-static char g_keys[1024];      // (the keys file in use)
 static void SDLCALL picked_game(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
     snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
-    pthread_mutex_unlock(&g_pick_lock);
-}
-static void SDLCALL picked_package(void *, const char *const *files, int) {
-    if (!files) {  // (an error: the details are in SDL_GetError)
-        LOG("[dialog] the file dialog failed: %s\n", SDL_GetError());
-        return;
-    }
-    if (!files[0]) return;
-    pthread_mutex_lock(&g_pick_lock);
-    snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
-    pthread_mutex_unlock(&g_pick_lock);
-}
-static void SDLCALL picked_keys(void *, const char *const *files, int) {
-    if (!files || !files[0]) return;
-    pthread_mutex_lock(&g_pick_lock);
-    snprintf(g_pick_keys, sizeof g_pick_keys, "%s", files[0]);
     pthread_mutex_unlock(&g_pick_lock);
 }
 static void SDLCALL picked_mod(void *, const char *const *files, int) {
@@ -245,20 +225,17 @@ static void game_files_section(SDL_Window *win) {
         return;
     }
     if (st >= SETUP_FAIL_NOT_FOUND) {
-        static const char *const en[] = {"No game files found in that folder.", "Those are packed game files (.xci / .nsp).",
-                                         "The game's code is encrypted: it needs your console's keys.",
+        static const char *const en[] = {"No game files found in that folder.",
                                          "That's not Pokémon: Let's Go, Eevee! or Pikachu!.", "The files couldn't be copied.",
                                          "The game code didn't build.", "The game code builder is missing from this copy."};
         static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo empacotados (.xci / .nsp).",
                                          "O código do jogo está cifrado: precisa das chaves do seu console.",
                                          "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.", "Os arquivos não puderam ser copiados.",
                                          "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia."};
-        static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.", "Extract them first (exefs and romfs).",
-                                           "Only the keys of the console that played it can read it.",
+        static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.",
                                            "Pick the folder of your own extracted Let's Go, Eevee! or Pikachu!.", "Check there are about 6 GB free and try again.",
                                            "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again."};
-        static const char *const pt_h[] = {"Escolha a pasta que tem exefs e romfs.", "Extraia antes (exefs e romfs).",
-                                           "Só as chaves do console onde jogou conseguem ler.",
+        static const char *const pt_h[] = {"Escolha a pasta que tem exefs e romfs.",
                                            "Escolha a pasta do seu Let's Go, Eevee! ou Pikachu! extraído.", "Confira se há uns 6 GB livres e tente de novo.",
                                            "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo."};
         int k = st - SETUP_FAIL_NOT_FOUND;
@@ -268,72 +245,12 @@ static void game_files_section(SDL_Window *win) {
         ImGui::PopTextWrapPos();
     } else {
         ImGui::PushTextWrapPos(0);
-        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs), "
-                                 "or the .nsp file itself: the program unpacks it.",
-                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs), "
-                                 "ou o próprio ficheiro .nsp: o programa descompacta-o."));
+        ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
+                                 "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs)."));
         ImGui::PopTextWrapPos();
     }
     if (ui_button(T("Select game folder...", "Selecionar pasta do jogo..."), -1))
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
-    // the package with the game inside (.nsp, or a 7z with one): the program unpacks it
-    // (the patterns are separated by semicolons: with commas the dialog shows nothing)
-    static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp;7z;xci;zip"}, {"All files", "*"}};
-    if (ui_button(T("Select game file (.nsp)...", "Selecionar ficheiro do jogo (.nsp)..."), -1))
-        SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 2, NULL, false);
-    // a package whose code is encrypted: the keys of the user's console, and hactool to use them
-    if (st == SETUP_FAIL_ENCRYPTED && g_package[0]) {
-        static const SDL_DialogFileFilter kf[] = {{"Keys", "dat;keys;prod"}, {"All files", "*"}};
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("%s", T("This package's code is encrypted. It needs the keys file of the console that "
-                                    "played the game (the keys.dat or prod.keys you dumped from it) and hactool, "
-                                    "which reads them. These are the console's own keys, not a password.",
-                                    "O código deste pacote está cifrado. Precisa do ficheiro de chaves da consola "
-                                    "onde jogaste (o keys.dat ou prod.keys que extraíste dela) e do hactool, que as "
-                                    "lê. São as chaves da própria consola, não uma senha."));
-        ImGui::PopTextWrapPos();
-        char keys[1024] = "";
-        if (take(g_pick_keys, keys, sizeof keys)) g_keys[0] = 0, snprintf(g_keys, sizeof g_keys, "%s", keys);
-        if (g_keys[0]) {
-            ImGui::TextDisabled("%s", g_keys);
-            if (ui_button(T("Change keys file...", "Trocar o ficheiro de chaves..."), -1))
-                SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
-        } else if (ui_button(T("Select keys file (keys.dat / prod.keys)...", "Selecionar o ficheiro de chaves (keys.dat / prod.keys)..."), -1))
-            SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
-        static char ht[1024] = "";
-        if (!ht[0]) {
-            // the one in the package (the Debian package ships it), else the system's
-            char p[1100];
-            if (rt_resource("hactool", NULL, p, sizeof p)) {
-                // (the path with the ".." in the middle, tidied up)
-                char real[1100];
-                snprintf(ht, sizeof ht, "%s", realpath(p, real) ? real : p);
-            } else
-                snprintf(ht, sizeof ht, "%s", "hactool");
-        }
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##hactool", "hactool", ht, sizeof ht);
-        ImGui::TextDisabled("%s", T("The hactool program (the one that reads the keys and decrypts the content).",
-                                    "O programa hactool (o que lê as chaves e descifra o conteúdo)."));
-        if (g_keys[0] && ui_button(T("Decrypt and set up", "Descifrar e preparar"), -1))
-            setup_start_decrypt(g_package, g_keys, ht);
-    }
-    // a package that asks for a password (the repacks often encrypt the file list)
-    if (st == SETUP_FAIL_PACKAGE && g_package[0]) {
-        static char pw[256] = "";
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("%s", T("The archive asks for a password: the one of the repack (whoever made it). "
-                                    "It is not the console's keys (those are a file, asked for further down).",
-                                    "O arquivo pede uma senha: a do repack (de quem o fez). Não são as chaves da "
-                                    "consola (essas são um ficheiro, pedido mais abaixo)."));
-        ImGui::PopTextWrapPos();
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##pw", T("Archive password...", "Senha do arquivo..."), pw, sizeof pw, ImGuiInputTextFlags_Password);
-        if (ui_button(T("Try again", "Tentar de novo"), -1)) {
-            nsp_set_password(pw);
-            setup_start_package(g_package);
-        }
-    }
 }
 
 // ------------------------------------------------------------------ the Mods tab
@@ -576,13 +493,6 @@ extern "C" void launcher_lg_run(const char *root) {
     int tab = getenv("LARECOMP_LAUNCHER_TAB") ? atoi(getenv("LARECOMP_LAUNCHER_TAB")) : keys_test ? TAB_CONTROLS : TAB_GAME;
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
-    // a package with the game inside (the keys and hactool, if the code is encrypted)
-    if (getenv("LARECOMP_SETUP_PACKAGE")) {
-        const char *k = getenv("LARECOMP_KEYS"), *h = getenv("LARECOMP_HACTOOL");
-        snprintf(g_package, sizeof g_package, "%s", getenv("LARECOMP_SETUP_PACKAGE"));
-        if (k && *k && h && *h) setup_start_decrypt(getenv("LARECOMP_SETUP_PACKAGE"), k, h);
-        else setup_start_package(getenv("LARECOMP_SETUP_PACKAGE"));
-    }
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
     static const float bg[4] = {0.86f, 0.93f, 0.47f, 1};  // (the F12 menu's look: ui_backdrop over it)
     const ImVec4 side_bg(1, 1, 1, 0.55f), gold(0.98f, 0.82f, 0.22f, 1), gold_hover(1.0f, 0.88f, 0.38f, 1),
@@ -599,15 +509,7 @@ extern "C" void launcher_lg_run(const char *root) {
             if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) focus_back = true;
         }
         char path[1024];
-        if (take(g_pick_game, path, sizeof path)) {
-            // a file (the package with the game inside) or a folder (the extracted files)
-            struct stat st;
-            if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
-                snprintf(g_package, sizeof g_package, "%s", path);
-                setup_start_package(path);
-            } else
-                setup_start(path);
-        }
+        if (take(g_pick_game, path, sizeof path)) setup_start(path);
         if (take(g_pick_mod, path, sizeof path)) mod_install_start(path);
         static int last_install;
         int inst = mod_install_state();

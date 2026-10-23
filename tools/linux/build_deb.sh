@@ -26,7 +26,6 @@ cd "$(dirname "$0")/../.."
 
 WITH_ZIG=${WITH_ZIG:-1}
 WITH_HELPER=${WITH_HELPER:-1}
-WITH_HACTOOL=${WITH_HACTOOL:-1}   # (hactool: o programa que le as chaves da consola e descifra o conteudo)
 JOBS=${JOBS:-$(nproc)}
 DEPS=${DEPS:-}  # a prefix with SDL3 / FFmpeg / shaderc (the distribution's, by default: empty)
 ARCH=${ARCH:-$(dpkg --print-architecture)}
@@ -67,11 +66,6 @@ if [ "$WITH_ZIG" = 1 ]; then
     ZIG_TARGET=$ZIG_ARCH-linux bash tools/fetch_zig.sh
 fi
 
-if [ "$WITH_HACTOOL" = 1 ]; then
-    echo "==> hactool (the keys reader)"
-    bash tools/fetch_hactool.sh
-fi
-
 echo "==> the package tree"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/usr/bin" "$STAGE/usr/share/letsgo-recomp" "$STAGE/usr/share/applications" \
@@ -89,10 +83,6 @@ if [ "$WITH_HELPER" = 1 ]; then
 fi
 if [ "$WITH_ZIG" = 1 ]; then
     cp -a build/zig "$STAGE/usr/share/letsgo-recomp/zig"
-fi
-if [ "$WITH_HACTOOL" = 1 ]; then
-    cp -a build/hactool/hactool "$STAGE/usr/share/letsgo-recomp/hactool"
-    chmod 755 "$STAGE/usr/share/letsgo-recomp/hactool"
 fi
 mkdir -p "$STAGE/usr/share/letsgo-recomp/gamelib-src"
 cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c \
@@ -132,7 +122,6 @@ find "$STAGE" -type f -exec chmod 644 {} +   # (the copied programs keep their o
 chmod 755 "$STAGE/usr/bin/letsgo-recomp"
 [ -f "$STAGE/usr/share/letsgo-recomp/lasgen/lasgen" ] && chmod 755 "$STAGE/usr/share/letsgo-recomp/lasgen/lasgen"
 [ -f "$STAGE/usr/share/letsgo-recomp/zig/zig" ] && chmod 755 "$STAGE/usr/share/letsgo-recomp/zig/zig"
-[ -f "$STAGE/usr/share/letsgo-recomp/hactool" ] && chmod 755 "$STAGE/usr/share/letsgo-recomp/hactool"
 
 echo "==> $OUT"
 mkdir -p build/dist
