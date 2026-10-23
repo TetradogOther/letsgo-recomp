@@ -114,7 +114,9 @@ RT_OBJ   := $(patsubst runtime/%.c,$(B)/rt/%.o,$(RT_SRC))
 RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Iruntime/nvn $(DEPINC) $(OSFLAGS)
 CXXFLAGS := -O2 -g -std=c++17 -I$(IMGUI) -I$(IMGUI)/backends -Iruntime -Iruntime/nvn -Ithird_party/fidelityfx/include $(DEPINC)
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB))
+# $(strip): the four wildcards leave spaces behind, and $(if) would take them for a non-empty list: the game code
+# library would be built even with no game code (a library with nothing in it, that the app then fails to load)
+all: $(EXE) $(if $(strip $(GEN_SRC)),$(GAMELIB))
 
 $(B)/obj/%.o: $(GEN)/%.c runtime/cpu.h runtime/simd.h runtime/simd_fp.h
 	@mkdir -p $(dir $@)
