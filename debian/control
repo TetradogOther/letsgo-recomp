@@ -7,7 +7,8 @@ Maintainer: Let's Go Recomp port <port@localhost>
 Homepage: https://github.com/TetradogOther/letsgo-recomp
 Bug-URL: https://github.com/TetradogOther/letsgo-recomp/issues
 Depends: libc6 (>= 2.38), libstdc++6 (>= 12), libgcc-s1, libsdl3-0 (>= 3.2.10),
- libvulkan1, libshaderc1, libavcodec61, libavformat61, libavutil59, libswscale8,
+ libvulkan1, libshaderc1, libavcodec61 | libavcodec62, libavformat61 | libavformat62,
+ libavutil59 | libavutil60, libswscale8 | libswscale9,
  libarchive-tools, curl, ca-certificates
 Recommends: vulkan-tools, mesa-vulkan-drivers | nvidia-driver-535 | amd64-microcode
 Suggests: gamepadtool, joystick
