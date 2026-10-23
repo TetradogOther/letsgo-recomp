@@ -434,5 +434,15 @@ bool plat_remove_tree(const char *dir) {
     return SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted;
 }
 
+// An archive: Windows' own tar (libarchive: .zip, .rar, .7z, .tar and its compressions).
+int plat_unpack(const char *archive, const char *dest) {
+    char tar[600];
+    const char *sys = getenv("SystemRoot");
+    snprintf(tar, sizeof tar, "%s\\System32\\tar.exe", sys ? sys : "C:\\Windows");
+    const char *argv[] = {tar, "-xf", archive, "-C", dest, NULL};
+    PlatProc p = plat_spawn(argv, NULL, false);
+    return p ? plat_proc_wait(p, true) : -1;
+}
+
 // End the process at once, skipping DLL teardown (from an atexit handler, after flushing). Exit status 0.
 void plat_terminate(void) { TerminateProcess(GetCurrentProcess(), 0); }

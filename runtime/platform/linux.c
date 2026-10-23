@@ -270,6 +270,23 @@ static int rm_entry(const char *path, const struct stat *sb, int flag, struct FT
 }
 bool plat_remove_tree(const char *dir) { return nftw(dir, rm_entry, 16, FTW_DEPTH | FTW_PHYS) == 0; }
 
+// An archive: bsdtar (libarchive, the package libarchive-tools: .zip, .rar, .7z, .tar and its compressions - the
+// same libarchive the Windows build unpacks with), then the system's tar (GNU: .tar and its compressions).
+int plat_unpack(const char *archive, const char *dest) {
+    const char *bsdtar[] = {"bsdtar", "-xf", archive, "-C", dest, NULL};
+    PlatProc p = plat_spawn(bsdtar, NULL, false);
+    int r = p ? plat_proc_wait(p, true) : -1;  // (-1: bsdtar isn't installed)
+    if (r == 0) return 0;
+    const char *tar[] = {"tar", "-xf", archive, "-C", dest, NULL};
+    p = plat_spawn(tar, NULL, false);
+    if (p) {
+        int r2 = plat_proc_wait(p, true);
+        if (r2 == 0) return 0;
+        if (r < 0) r = r2;  // (bsdtar wasn't there: the tar's code is the one to report)
+    }
+    return r;
+}
+
 // End the process at once, skipping the library teardown: as on Windows, the GPU driver's threads crashed in exit()
 // while the game's threads still submitted work.
 void plat_terminate(void) { _exit(0); }

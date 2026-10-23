@@ -35,10 +35,18 @@
 #define PAK "cache/ui2x.pak"
 #define WORK "cache/ui2x_work"
 #define TOOL_DIR "cache/waifu2x"
+// The upscaler (nihui's waifu2x-ncnn-vulkan): the release of this OS. The Windows one is a zip with the .exe; the
+// Linux one is the same program built for Linux (it needs a Vulkan 1.2 driver, like the game).
+#ifdef _WIN32
 #define TOOL_NAME "waifu2x-ncnn-vulkan-20250915-windows"
-#define TOOL_URL "https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20250915/" TOOL_NAME ".zip"
 #define TOOL_SIZE 35497352ull
 #define TOOL_SHA256 "7425be94b94e4c8f37a1e433ac0e0100c43790e2c37418f4b65d8235adfbdc87"
+#else
+#define TOOL_NAME "waifu2x-ncnn-vulkan-20250915-linux"
+#define TOOL_SIZE 36658685ull
+#define TOOL_SHA256 "848e0fba55657d34da90b775b8139e9806dc754798b029f95e106ba8850a731f"
+#endif
+#define TOOL_URL "https://github.com/nihui/waifu2x-ncnn-vulkan/releases/download/20250915/" TOOL_NAME ".zip"
 
 static _Atomic int g_state;
 static _Atomic float g_progress;
@@ -200,16 +208,18 @@ static bool fetch_tool(void) {
     char exe[512], dir[512];
     tool_paths(exe, sizeof exe, dir, sizeof dir);
     if (is_file(exe)) return true;
-#ifdef _WIN32
     g_state = UI2X_DOWNLOADING, g_progress = 0;
     mkdir("cache", 0755);
     mkdir(TOOL_DIR, 0755);
     const char *zip = TOOL_DIR "/download.zip";
     remove(zip);
-    char curl[600], tar[600];
+    char curl[600];
+#ifdef _WIN32
     const char *sys = getenv("SystemRoot");
     snprintf(curl, sizeof curl, "%s\\System32\\curl.exe", sys ? sys : "C:\\Windows");
-    snprintf(tar, sizeof tar, "%s\\System32\\tar.exe", sys ? sys : "C:\\Windows");
+#else
+    snprintf(curl, sizeof curl, "curl");  // (the system's: the Linux package depends on it)
+#endif
     const char *dl[] = {curl, "-fsSL", "--retry", "2", "-o", zip, TOOL_URL, NULL};
     PlatProc p = plat_spawn(dl, TOOL_DIR "/download.log", false);
     int r = -1;
@@ -223,18 +233,12 @@ static bool fetch_tool(void) {
         remove(zip);
         return false;
     }
-    const char *un[] = {tar, "-xf", zip, "-C", TOOL_DIR, NULL};
-    p = plat_spawn(un, TOOL_DIR "/unpack.log", false);
-    r = p ? plat_proc_wait(p, true) : -1;
+    r = plat_unpack(zip, TOOL_DIR);
     remove(zip);
-    if (r != 0 || !is_file(exe)) { LOG("[ui2x] couldn't unpack the upscaler (tar %d)\n", r); return false; }
+    if (r != 0 || !is_file(exe)) { LOG("[ui2x] couldn't unpack the upscaler (%d)\n", r); return false; }
     remove(TOOL_DIR "/download.log");
     remove(TOOL_DIR "/unpack.log");
     return true;
-#else
-    LOG("[ui2x] no upscaler: put waifu2x-ncnn-vulkan (nihui) in %s\n", dir);
-    return false;
-#endif
 }
 
 // ================================================================== step 2: the textures, from the game files

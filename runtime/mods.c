@@ -188,17 +188,11 @@ static void *install_thread(void *arg) {
     if (!name[0]) snprintf(name, sizeof name, "mod");
     mkdir("mods", 0755);
     const char *root = src;
-    if (!is_dir(src)) {  // an archive: Windows' own tar (libarchive: .zip, .rar, .7z) into mods/.install
+    if (!is_dir(src)) {  // an archive: unpacked into mods/.install (bsdtar: .zip, .rar, .7z, .tar)
         rm_tree("mods/.install");
         mkdir("mods/.install", 0755);
-        char tar[600];
-        const char *sys = getenv("SystemRoot");
-        snprintf(tar, sizeof tar, "%s\\System32\\tar.exe", sys ? sys : "C:\\Windows");
-        const char *argv[] = {tar, "-xf", src, "-C", "mods/.install", NULL};
-        PlatProc p = plat_spawn(argv, "mods/.install.log", false);
-        int r = p ? plat_proc_wait(p, true) : -1;
-        remove("mods/.install.log");
-        if (r != 0) { LOG("[mods] couldn't unpack %s (tar %d)\n", src, r); g_install_state = MOD_INSTALL_FAIL_UNPACK; goto done; }
+        int r = plat_unpack(src, "mods/.install");
+        if (r != 0) { LOG("[mods] couldn't unpack %s (%d)\n", src, r); g_install_state = MOD_INSTALL_FAIL_UNPACK; goto done; }
         root = "mods/.install";
     }
     {
