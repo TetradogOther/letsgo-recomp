@@ -27,6 +27,7 @@
 
 extern "C" {
 #include "gamesetup.h"
+#include "nsp.h"
 #include "rt.h"
 #include "input_bind.h"
 #include "mods.h"
@@ -175,6 +176,7 @@ static void ui2x_section(bool ready, bool *on) {
 // ------------------------------------------------------------------ file dialogs (SDL calls back on any thread)
 static pthread_mutex_t g_pick_lock = PTHREAD_MUTEX_INITIALIZER;
 static char g_pick_game[1024], g_pick_mod[1024];
+static char g_package[1024];  // (the package the setup was given: its password can be tried again)
 static void SDLCALL picked_game(void *, const char *const *files, int) {
     if (!files || !files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
@@ -270,7 +272,21 @@ static void game_files_section(SDL_Window *win) {
     // (the patterns are separated by semicolons: with commas the dialog shows nothing)
     static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp;7z;xci;zip"}, {"All files", "*"}};
     if (ui_button(T("Select game file (.nsp)...", "Selecionar ficheiro do jogo (.nsp)..."), -1))
-        SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 1, NULL, false);
+        SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 2, NULL, false);
+    // a package that asks for a password (the repacks often encrypt the file list)
+    if (st == SETUP_FAIL_PACKAGE && g_package[0]) {
+        static char pw[256] = "";
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", T("The archive asks for a password (the repacks often have one).",
+                                    "O arquivo pede uma senha (os repacks costumam ter uma)."));
+        ImGui::PopTextWrapPos();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##pw", T("Password...", "Senha..."), pw, sizeof pw, ImGuiInputTextFlags_Password);
+        if (ui_button(T("Try again", "Tentar de novo"), -1)) {
+            nsp_set_password(pw);
+            setup_start_package(g_package);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ the Mods tab
@@ -532,8 +548,11 @@ extern "C" void launcher_lg_run(const char *root) {
         if (take(g_pick_game, path, sizeof path)) {
             // a file (the package with the game inside) or a folder (the extracted files)
             struct stat st;
-            if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) setup_start_package(path);
-            else setup_start(path);
+            if (stat(path, &st) == 0 && S_ISREG(st.st_mode)) {
+                snprintf(g_package, sizeof g_package, "%s", path);
+                setup_start_package(path);
+            } else
+                setup_start(path);
         }
         if (take(g_pick_mod, path, sizeof path)) mod_install_start(path);
         static int last_install;

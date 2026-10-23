@@ -23,6 +23,8 @@ enum {
 int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_size);
 // The folder with the exefs (main + main.npdm) in what was unpacked, "" if there is none.
 bool nsp_find_exefs(const char *dir, char *out, size_t n);
+// The password of an archive that asks for one (the repacks often have the file list encrypted). NULL: none.
+void nsp_set_password(const char *pw);
 
 #ifdef __cplusplus
 }

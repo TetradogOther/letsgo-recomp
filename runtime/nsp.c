@@ -130,6 +130,13 @@ static int pfs0_extract(const char *path, const char *out_dir, char *why, size_t
     return rc;
 }
 
+// The password of an archive that asks for one (the repacks often encrypt the file list)
+static char g_password[256];
+
+void nsp_set_password(const char *pw) {
+    snprintf(g_password, sizeof g_password, "%s", pw ? pw : "");
+}
+
 // ---- the game's code: encrypted or not
 // The NSO header's flags: the first bit says the file is encrypted with the title key.
 static bool code_encrypted(const char *dir) {
@@ -225,6 +232,25 @@ static bool copy_tree(const char *src, const char *dst) {
     return ok;
 }
 
+// A 7z with an encrypted file list: libarchive can't read those (only the 7z program can), so it is tried too.
+static int unpack_7z(const char *path, const char *out_dir, char *why, size_t why_size) {
+    int r = plat_unpack(path, out_dir, NULL);
+    if (r == 0) return 0;
+    char pw[300], out[1200];
+    snprintf(pw, sizeof pw, "-p%s", g_password);
+    snprintf(out, sizeof out, "-o%s", out_dir);  // (-o and the folder are one argument)
+    const char *argv[] = {"7z", "x", "-y", pw, out, path, NULL};
+    PlatProc p = plat_spawn(argv, NULL, false);
+    if (p) {
+        int r2 = plat_proc_wait(p, true);
+        if (r2 == 0) return 0;
+        if (r < 0) r = r2;
+    }
+    snprintf(why, why_size, g_password[0] ? "can't unpack the 7z (wrong password, or the file is damaged or incomplete)"
+                                           : "can't unpack the 7z (it needs the 7z program, or the file is damaged)");
+    return r;
+}
+
 int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_size) {
     why[0] = 0;
     mkdir(out_dir, 0755);
@@ -239,12 +265,8 @@ int nsp_extract(const char *path, const char *out_dir, char *why, size_t why_siz
         if (rc != NSP_OK) return rc;
     } else if (got >= 6 && !memcmp(head, "7z\xbc\xaf\x27\x1c", 6)) {
         // a 7z: unpacked with the system's archiver (bsdtar on Linux, tar.exe on Windows)
-        int r = plat_unpack(path, out_dir, NULL);
-        if (r != 0) {
-            snprintf(why, why_size, r < 0 ? "can't unpack the 7z: bsdtar is not installed (the libarchive-tools package)"
-                                           : "can't unpack the 7z (the file is damaged or incomplete)");
-            return NSP_ERR_IO;
-        }
+        int r = unpack_7z(path, out_dir, why, why_size);
+        if (r != 0) return NSP_ERR_IO;
         // a .nsp inside it? then that one is the container: its files are copied next to the 7z's ones
         DIR *d = opendir(out_dir);
         if (d) {
