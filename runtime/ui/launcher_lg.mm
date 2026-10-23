@@ -285,10 +285,12 @@ static void game_files_section(SDL_Window *win) {
     if (st == SETUP_FAIL_ENCRYPTED && g_package[0]) {
         static const SDL_DialogFileFilter kf[] = {{"Keys", "dat;keys;prod"}, {"All files", "*"}};
         ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("%s", T("This package's code is encrypted. It needs the keys of the console that played "
-                                    "the game (the keys.dat or prod.keys you dumped from it) and hactool to read them.",
-                                    "O código deste pacote está cifrado. Precisa das chaves da consola onde jogaste "
-                                    "(o keys.dat ou prod.keys que extraíste dela) e do hactool para as ler."));
+        ImGui::TextDisabled("%s", T("This package's code is encrypted. It needs the keys file of the console that "
+                                    "played the game (the keys.dat or prod.keys you dumped from it) and hactool, "
+                                    "which reads them. These are the console's own keys, not a password.",
+                                    "O código deste pacote está cifrado. Precisa do ficheiro de chaves da consola "
+                                    "onde jogaste (o keys.dat ou prod.keys que extraíste dela) e do hactool, que as "
+                                    "lê. São as chaves da própria consola, não uma senha."));
         ImGui::PopTextWrapPos();
         char keys[1024] = "";
         if (take(g_pick_keys, keys, sizeof keys)) g_keys[0] = 0, snprintf(g_keys, sizeof g_keys, "%s", keys);
@@ -296,7 +298,7 @@ static void game_files_section(SDL_Window *win) {
             ImGui::TextDisabled("%s", g_keys);
             if (ui_button(T("Change keys file...", "Trocar o ficheiro de chaves..."), -1))
                 SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
-        } else if (ui_button(T("Select keys file...", "Selecionar o ficheiro de chaves..."), -1))
+        } else if (ui_button(T("Select keys file (keys.dat / prod.keys)...", "Selecionar o ficheiro de chaves (keys.dat / prod.keys)..."), -1))
             SDL_ShowOpenFileDialog(picked_keys, NULL, win, kf, 2, NULL, false);
         static char ht[1024] = "";
         if (!ht[0]) {
@@ -320,11 +322,13 @@ static void game_files_section(SDL_Window *win) {
     if (st == SETUP_FAIL_PACKAGE && g_package[0]) {
         static char pw[256] = "";
         ImGui::PushTextWrapPos(0);
-        ImGui::TextDisabled("%s", T("The archive asks for a password (the repacks often have one).",
-                                    "O arquivo pede uma senha (os repacks costumam ter uma)."));
+        ImGui::TextDisabled("%s", T("The archive asks for a password: the one of the repack (whoever made it). "
+                                    "It is not the console's keys (those are a file, asked for further down).",
+                                    "O arquivo pede uma senha: a do repack (de quem o fez). Não são as chaves da "
+                                    "consola (essas são um ficheiro, pedido mais abaixo)."));
         ImGui::PopTextWrapPos();
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##pw", T("Password...", "Senha..."), pw, sizeof pw, ImGuiInputTextFlags_Password);
+        ImGui::InputTextWithHint("##pw", T("Archive password...", "Senha do arquivo..."), pw, sizeof pw, ImGuiInputTextFlags_Password);
         if (ui_button(T("Try again", "Tentar de novo"), -1)) {
             nsp_set_password(pw);
             setup_start_package(g_package);
