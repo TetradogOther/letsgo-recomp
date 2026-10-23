@@ -35,9 +35,17 @@ case "$ARCH" in
     *) echo "build_deb: ARCH $ARCH not supported (amd64, arm64)"; exit 1 ;;
 esac
 VERSION=$(sed -n 's/^#define RT_APP_VERSION "\(.*\)".*/\1/p' runtime/paths.h)
+# The Debian version: the app's version and a revision that changes with every build (the commit and the time), so
+# that apt takes the new package over the one already installed. DEB_REVISION=<r> sets it by hand (a release).
+if [ -n "${DEB_REVISION:-}" ]; then
+    DEB_VERSION="$VERSION-$DEB_REVISION"
+else
+    HASH=$(git rev-parse --short HEAD 2>/dev/null || echo local)
+    DEB_VERSION="$VERSION-1.$HASH.$(date -u +%Y%m%d%H%M)"
+fi
 B=build/deb
 STAGE=$B/stage
-OUT=build/dist/letsgo-recomp_${VERSION}_${DEB_ARCH}.deb
+OUT=build/dist/letsgo-recomp_${DEB_VERSION}_${DEB_ARCH}.deb
 
 echo "==> the runtime (build/deb/obj)"
 make -j"$JOBS" LD= DEPS="$DEPS" B=$B/obj "$B/obj/lasrecomp"
@@ -98,7 +106,7 @@ cp debian/letsgo-recomp.desktop "$STAGE/usr/share/applications/"
 cp debian/letsgo-recomp.1 "$STAGE/usr/share/man/man1/"
 
 # the metadata
-sed -e "s/^Version: .*/Version: $VERSION-1/" -e "s/^Architecture: .*/Architecture: $DEB_ARCH/" debian/control \
+sed -e "s/^Version: .*/Version: $DEB_VERSION/" -e "s/^Architecture: .*/Architecture: $DEB_ARCH/" debian/control \
     > "$STAGE/DEBIAN/control"
 if [ "$WITH_ZIG" = 0 ]; then
     # no zig in the package: the game code is built with the system's compiler
@@ -106,7 +114,9 @@ if [ "$WITH_ZIG" = 0 ]; then
         "$STAGE/DEBIAN/control"
 fi
 cp debian/copyright "$STAGE/DEBIAN/copyright"
-gzip -9nc debian/changelog > "$STAGE/DEBIAN/changelog.Debian.gz"
+# the changelog: its first entry's version is the package's
+sed "0,/^letsgo-recomp ([^)]*)/s/^letsgo-recomp ([^)]*)/letsgo-recomp ($DEB_VERSION)/" debian/changelog \
+    | gzip -9n > "$STAGE/DEBIAN/changelog.Debian.gz"
 find "$STAGE" -type d -exec chmod 755 {} +
 find "$STAGE" -type f -exec chmod 644 {} +   # (the copied programs keep their own mode: cp -a)
 chmod 755 "$STAGE/usr/bin/letsgo-recomp"
