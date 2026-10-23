@@ -27,6 +27,7 @@
 
 extern "C" {
 #include "gamesetup.h"
+#include "rt.h"
 #include "input_bind.h"
 #include "mods.h"
 #include "paths.h"
@@ -181,7 +182,11 @@ static void SDLCALL picked_game(void *, const char *const *files, int) {
     pthread_mutex_unlock(&g_pick_lock);
 }
 static void SDLCALL picked_package(void *, const char *const *files, int) {
-    if (!files || !files[0]) return;
+    if (!files) {  // (an error: the details are in SDL_GetError)
+        LOG("[dialog] the file dialog failed: %s\n", SDL_GetError());
+        return;
+    }
+    if (!files[0]) return;
     pthread_mutex_lock(&g_pick_lock);
     snprintf(g_pick_game, sizeof g_pick_game, "%s", files[0]);
     pthread_mutex_unlock(&g_pick_lock);
@@ -262,7 +267,8 @@ static void game_files_section(SDL_Window *win) {
     if (ui_button(T("Select game folder...", "Selecionar pasta do jogo..."), -1))
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
     // the package with the game inside (.nsp, or a 7z with one): the program unpacks it
-    static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp,7z,xci,zip"}};
+    // (the patterns are separated by semicolons: with commas the dialog shows nothing)
+    static const SDL_DialogFileFilter filters[] = {{"Game packages", "nsp;7z;xci;zip"}, {"All files", "*"}};
     if (ui_button(T("Select game file (.nsp)...", "Selecionar ficheiro do jogo (.nsp)..."), -1))
         SDL_ShowOpenFileDialog(picked_package, NULL, win, filters, 1, NULL, false);
 }
