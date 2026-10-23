@@ -1,0 +1,20 @@
+# The build container for the Debian package: tools/linux/build_container.sh
+#
+# Debian 13 ("trixie"), the distribution the package is built for: its SDL3, FFmpeg, shaderc and Vulkan headers are
+# the ones the package links against. The checkout is mounted at /src; the package is written to
+# build/dist/ (in the checkout).
+#
+# Needs podman or docker:
+#   tools/linux/build_container.sh
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        clang lld make pkg-config python3 python3-venv python3-pip \
+        libsdl3-dev libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+        libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
+        libarchive-tools curl ca-certificates file dpkg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+CMD ["bash", "tools/linux/build_deb.sh"]

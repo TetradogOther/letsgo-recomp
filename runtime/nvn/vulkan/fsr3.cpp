@@ -44,6 +44,11 @@ extern "C" bool fsr3_available(void) {
     }
     return loaded == 1;
 #else
+    // no AMD library for this platform (the SDK's Linux build isn't in the package): the upscaler stays FSR 1
+    if (loaded < 0) {
+        loaded = 0;
+        LOG("[fsr3] not available on this platform: FSR 1 instead\n");
+    }
     return false;
 #endif
 }
