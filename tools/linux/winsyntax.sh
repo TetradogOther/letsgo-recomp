@@ -24,6 +24,15 @@ FLAGS="--target=x86_64-w64-mingw32 -isystem $MINGW/include -isystem $SDL3/.. -is
  -Iruntime -Iruntime/nvn -Iruntime/platform -Ithird_party/imgui -Ithird_party/imgui/backends
  -Ithird_party/fidelityfx/include"
 
+# the FFmpeg headers (the distribution's multiarch folder: the cross-compiler does not look in the host's
+# /usr/include, so they have to be pointed at)
+FFMPEG=${FFMPEG:-/usr/include/$(gcc -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)}
+if [ -d "$FFMPEG/libavcodec" ]; then
+    FLAGS="$FLAGS -isystem $FFMPEG"
+else
+    echo "winsyntax: the FFmpeg headers are not there ($FFMPEG/libavcodec): movie.c will not compile"
+fi
+
 SRC="runtime/platform/windows.c runtime/paths.c runtime/png.c runtime/mods.c runtime/ui2x.c
  runtime/nvn/vulkan/device.c runtime/nvn/vulkan/fsr3.cpp runtime/nvn/vulkan/exec.c runtime/gamebuild.c
  runtime/gamelib.c runtime/hle/movie.c runtime/ui/launcher_lg.mm runtime/ui/menu.mm runtime/ui/settings_ui.mm

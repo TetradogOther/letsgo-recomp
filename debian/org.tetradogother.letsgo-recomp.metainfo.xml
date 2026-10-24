@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 the Let's Go Recomp contributors (CC0-1.0: the metadata) -->
+<component type="desktop-application">
+  <id>org.tetradogother.letsgo-recomp</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0+</project_license>
+  <name>Let's Go Recomp</name>
+  <summary>Native port of Pokémon: Let's Go, Eevee! and Pikachu!</summary>
+  <summary xml:lang="pt">Port nativo de Pokémon: Let's Go, Eevee! e Pikachu!</summary>
+  <description>
+    <p>
+      A native port of the Nintendo Switch games Pokémon: Let's Go, Eevee! and Pokémon: Let's Go, Pikachu!, made by
+      static recompilation: the games' ARM64 code is translated into C and compiled for the computer, and a runtime
+      stands in for the Switch (system services, NVN graphics on Vulkan, audio, controllers). It is not an emulator.
+    </p>
+    <p>
+      The game code is recompiled on the player's own machine, once per game: the start screen asks for the folder
+      with their own extracted copy of the game (the one with exefs and romfs), copies it, translates it and builds
+      it for their computer.
+    </p>
+    <p>
+      No game files are included: you need your own legally obtained copy of the game, extracted. A fan project, not
+      affiliated with Nintendo, The Pokémon Company, Game Freak or Creatures.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.tetradogother.letsgo-recomp.desktop</launchable>
+  <url type="homepage">https://github.com/TetradogOther/letsgo-recomp</url>
+  <url type="bugtracker">https://github.com/TetradogOther/letsgo-recomp/issues</url>
+  <developer id="org.tetradogother">
+    <name>The Let's Go Recomp contributors</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>gamepad</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">774</display_length>
+  </requires>
+  <categories>
+    <category>Game</category>
+    <category>RolePlaying</category>
+  </categories>
+  <keywords>
+    <keyword>pokemon</keyword>
+    <keyword>pokémon</keyword>
+    <keyword>lets go</keyword>
+    <keyword>eevee</keyword>
+    <keyword>picachu</keyword>
+  </keywords>
+  <releases>
+    <release version="0.6.0" date="2026-10-22">
+      <description>
+        <p>The Linux port: the runtime builds and runs on Debian 13 and Ubuntu 24.04, and there is a Debian package
+        and an AppImage.</p>
+      </description>
+    </release>
+  </releases>
+</component>

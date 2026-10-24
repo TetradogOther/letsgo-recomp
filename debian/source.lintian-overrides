@@ -1,0 +1,21 @@
+# lintian: the tags this package is allowed to keep, and why.
+#
+# Each line: <tag>: <justification>
+
+# The generator and the compiler are inside the package, and the compiler (zig) is a static binary: there is no
+# dynamic library to depend on, and it is the same in the release for Windows and in the AppImage.
+statically-linked-binary: the Zig compiler ships as a static binary (it has no shared libraries to depend on)
+
+# The package is the program of a game, but the game's own files are not in it: the player brings their own copy,
+# extracted (as the upstream project does on Windows).
+package-section-games-but-contains-no-game: the game's own files are the player's own copy, and are not in the package
+
+# The generator (PyInstaller) is a frozen Python program: the linker options are PyInstaller's.
+hardening-no-pie: the generator is frozen with PyInstaller, which does not build a position-independent executable
+
+# The Python modules of the frozen generator need the Python shared library, which is inside it (in _internal).
+shared-library-lacks-prerequisites: the Python shared library is inside the generator (its _internal folder)
+
+# The generator (PyInstaller) carries the system's Python and the libraries it is built with (zlib, bzip2, expat, xz,
+# libffi): their licences are declared in debian/copyright, and they are the distribution's own files.
+embedded-library: the generator is frozen with PyInstaller, which carries the system's Python and its libraries; their licences are in debian/copyright
