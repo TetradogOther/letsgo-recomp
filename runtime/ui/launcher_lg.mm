@@ -225,13 +225,18 @@ static void game_files_section(SDL_Window *win) {
         return;
     }
     if (st >= SETUP_FAIL_NOT_FOUND) {
+        // one message per failure, in the order of the SETUP_FAIL_* enum: the two tables are parallel (the check
+        // below) and so are the hints below them
         static const char *const en[] = {"No game files found in that folder.",
                                          "That's not Pokémon: Let's Go, Eevee! or Pikachu!.", "The files couldn't be copied.",
                                          "The game code didn't build.", "The game code builder is missing from this copy."};
-        static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo empacotados (.xci / .nsp).",
-                                         "O código do jogo está cifrado: precisa das chaves do seu console.",
-                                         "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.", "Os arquivos não puderam ser copiados.",
-                                         "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia."};
+        static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.",
+                                         "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.",
+                                         "Os arquivos não puderam ser copiados.",
+                                         "O código do jogo não compilou.",
+                                         "O compilador do código do jogo não está nesta cópia."};
+        static_assert(sizeof en / sizeof *en == sizeof pt / sizeof *pt, "the two message tables must be parallel");
+        static_assert(sizeof en / sizeof *en == 5, "one message per SETUP_FAIL_* failure");
         static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.",
                                            "Pick the folder of your own extracted Let's Go, Eevee! or Pikachu!.", "Check there are about 6 GB free and try again.",
                                            "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again."};
