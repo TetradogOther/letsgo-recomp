@@ -36,6 +36,7 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import;
+    bool present_timing;        // VK_KHR_present_id + VK_KHR_present_wait: when each window image reached the screen
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;

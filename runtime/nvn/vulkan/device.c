@@ -163,8 +163,17 @@ static void create_device(void) {
     // LARECOMP_PRESENT_LOG=<file>: when each window image reached the screen (present_log_*: VK_KHR_present_wait)
     g_present_log = getenv("LARECOMP_PRESENT_LOG") && has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) &&
                     has_ext(ep, ne, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
-    if (g_present_log) ext[n_ext++] = VK_KHR_PRESENT_ID_EXTENSION_NAME, ext[n_ext++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
-    else if (getenv("LARECOMP_PRESENT_LOG")) LOG("[vk] LARECOMP_PRESENT_LOG: the driver has no VK_KHR_present_wait\n");
+    // The time each window image reached the screen (VK_KHR_present_wait): on Windows the compositor's timing gives
+    // the vertical blank (DwmGetCompositionTimingInfo); on Linux there is no such API, and the driver's own wait for
+    // the presentation engine is the same thing: the blank that showed the image. It is what the frame generation's
+    // grid needs (the in-between images snapped to the display's refresh, like on Windows).
+    bool timing = has_ext(ep, ne, VK_KHR_PRESENT_ID_EXTENSION_NAME) && has_ext(ep, ne, VK_KHR_PRESENT_WAIT_EXTENSION_NAME);
+#ifdef _WIN32
+    timing = timing && g_present_log;  // (on Windows the grid comes from the compositor: the wait is only for the log)
+#endif
+    g_vk.present_timing = timing;
+    if (timing) ext[n_ext++] = VK_KHR_PRESENT_ID_EXTENSION_NAME, ext[n_ext++] = VK_KHR_PRESENT_WAIT_EXTENSION_NAME;
+    if (g_present_log && !timing) LOG("[vk] LARECOMP_PRESENT_LOG: the driver has no VK_KHR_present_wait\n");
     g_vk.custom_border = has_ext(ep, ne, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     if (g_vk.custom_border) ext[n_ext++] = VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME;
     g_vk.divisor = has_ext(ep, ne, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
@@ -495,14 +504,17 @@ static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
 
 // LARECOMP_PRESENT_LOG=<file>: each window image's present call and the time it reached the screen (a thread waits
 // for each with vkWaitForPresentKHR): "id,frame,image,nimg,present_ms,shown_ms" (ms since the first image)
+// The same wait gives the time the image reached the screen: on Linux it is the vertical blank that showed it (the
+// frame generation's grid: vblank_grid), the compositor's timing is only on Windows.
 static struct { uint64_t id, frame, t; int image, nimg; } pl_q[256];
 static uint64_t pl_head, pl_tail, pl_id, pl_t0;
+static uint64_t g_shown_ns;  // (the last window image that reached the screen)
 static pthread_mutex_t pl_lk = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pl_cv = PTHREAD_COND_INITIALIZER;
 static void *present_log_main(void *arg) {
     FILE *f = arg;
     PFN_vkWaitForPresentKHR wait = (PFN_vkWaitForPresentKHR)vkGetDeviceProcAddr(g_vk.dev, "vkWaitForPresentKHR");
-    fputs("id,frame,image,nimg,present_ms,shown_ms\n", f);
+    if (f) fputs("id,frame,image,nimg,present_ms,shown_ms\n", f);
     for (;;) {
         pthread_mutex_lock(&pl_lk);
         while (pl_head == pl_tail) pthread_cond_wait(&pl_cv, &pl_lk);
@@ -513,6 +525,8 @@ static void *present_log_main(void *arg) {
         pthread_mutex_lock(&pl_lk);
         pl_head++;
         pthread_mutex_unlock(&pl_lk);
+        if (r == VK_SUCCESS) __atomic_store_n(&g_shown_ns, now, __ATOMIC_RELAXED);  // (it reached the screen)
+        if (!f) continue;
         fprintf(f, "%llu,%llu,%d,%d,%.3f,%.3f%s\n", (unsigned long long)e.id, (unsigned long long)e.frame, e.image, e.nimg,
                 (e.t - pl_t0) / 1e6, (now - pl_t0) / 1e6, r == VK_SUCCESS ? "" : ",fail");
         if (e.id % 64 == 0) fflush(f);
@@ -533,17 +547,20 @@ static void present_swap_image(uint32_t img, VkQueue q, uint64_t frame, int imag
     if (trace) LOG("[vk] present image %u\n", img);
     VkPresentIdKHR pidi = {.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR, .swapchainCount = 1};
     uint64_t id = 0;
-    if (g_present_log) {
+    if (g_vk.present_timing) {
         static bool started;
         if (!started) {
             started = true;
             pl_t0 = SDL_GetTicksNS();
-            FILE *f = fopen(getenv("LARECOMP_PRESENT_LOG"), "w");
+            FILE *f = NULL;
+            if (g_present_log) {
+                f = fopen(getenv("LARECOMP_PRESENT_LOG"), "w");
+                if (!f) g_present_log = false;
+            }
             pthread_t th;
-            if (f) pthread_create(&th, NULL, present_log_main, f);
-            else g_present_log = false;
+            if (pthread_create(&th, NULL, present_log_main, f) != 0 && f) fclose(f);
         }
-        id = ++pl_id;
+        id = __atomic_add_fetch(&pl_id, 1, __ATOMIC_RELAXED);
         pidi.pPresentIds = &id;
         pi.pNext = &pidi;
     }
@@ -551,7 +568,7 @@ static void present_swap_image(uint32_t img, VkQueue q, uint64_t frame, int imag
     pthread_mutex_lock(&sc_lk);
     VkResult r = vkQueuePresentKHR(q, &pi);
     pthread_mutex_unlock(&sc_lk);
-    if (g_present_log) {
+    if (g_vk.present_timing) {
         pthread_mutex_lock(&pl_lk);
         if (pl_tail - pl_head < 256) {
             pl_q[pl_tail % 256].id = id, pl_q[pl_tail % 256].frame = frame, pl_q[pl_tail % 256].t = tpres;
@@ -906,8 +923,24 @@ static bool vblank_grid(uint64_t *vb, uint64_t *vp) {
     *vb = t - (uint64_t)ago;
     return true;
 #else
-    (void)vb, (void)vp;
-    return false;
+    // Linux: the vertical blank of the last window image that reached the screen (VK_KHR_present_wait: the driver
+    // waits for the presentation engine, which is the blank that showed it) and the display's refresh (SDL). The
+    // compositor's timing (Windows' DwmGetCompositionTimingInfo) has no equivalent here, so the grid is measured
+    // from the presents themselves.
+    static int off = -1;
+    // (LARECOMP_FG_NO_VSYNC_GRID=1: no grid - the images go as they come)
+    if (off < 0) off = getenv("LARECOMP_FG_NO_VSYNC_GRID") != NULL;
+    if (off) return false;
+    uint64_t shown = __atomic_load_n(&g_shown_ns, __ATOMIC_RELAXED);
+    if (!shown) return false;                                   // (nothing reached the screen yet)
+    uint64_t now = SDL_GetTicksNS();
+    if (now - shown > 500000000ull) return false;               // (stale: the last one was a while ago)
+    double hz = vk_display_hz();
+    if (hz < 20 || hz > 500) return false;                      // (unknown: the common case)
+    *vp = (uint64_t)(1e9 / hz);
+    if (*vp < 2000000 || *vp > 50000000) return false;           // (500 .. 20 Hz: anything else is not a display's)
+    *vb = shown;
+    return true;
 #endif
 }
 
