@@ -53,7 +53,8 @@ if [ "$BUNDLE_LIBS" = 1 ]; then
     echo "==> the libraries (inside)"
     bash tools/linux/bundle_libs.sh "$APPDIR/usr/bin/letsgo-recomp" "$APPDIR/usr/lib"
     if [ -x "$APPDIR/usr/lib/$RT_PKG_DIR/lasgen/lasgen" ]; then
-        bash tools/linux/bundle_libs.sh "$APPDIR/usr/lib/$RT_PKG_DIR/lasgen/lasgen" "$APPDIR/usr/lib/$RT_PKG_DIR/lasgen"
+        # (the generator's own libraries go next to it: the RUNPATH is $ORIGIN)
+        bash tools/linux/bundle_libs.sh "$APPDIR/usr/lib/$RT_PKG_DIR/lasgen/lasgen" "$APPDIR/usr/lib/$RT_PKG_DIR/lasgen" '$ORIGIN'
     fi
 else
     echo "==> the libraries: the system's (BUNDLE_LIBS=0)"

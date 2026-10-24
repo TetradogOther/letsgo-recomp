@@ -2,11 +2,11 @@
 # tools/linux/bundle_libs.sh: the libraries the runtime needs, inside the AppImage (so it runs on a system that has
 # no SDL3 or FFmpeg installed).
 #
-#   tools/linux/bundle_libs.sh <program> <lib folder>
+#   tools/linux/bundle_libs.sh <program> <lib folder> [rpath]
 #
 # What it does: reads the program's dependencies (ldd), copies them into the folder, and points the program at them
 # (patchelf, with a RUNPATH of $ORIGIN, so only our own programs use them - the driver's own libraries are the
-# system's).
+# system's). The rpath is the one the program gets ($ORIGIN/../lib by default: the libraries one folder up).
 #
 # What it does NOT bundle:
 #   - the C library and the loader (the system's: the AppImage is built on one distribution and runs on others);
@@ -20,6 +20,7 @@ set -euo pipefail
 
 BIN=${1:?the program}
 LIBDIR=${2:?the folder for the libraries}
+RPATH=${3:-$ORIGIN/../lib}   # (the libraries' own: $ORIGIN, so each one finds the others)
 
 # the libraries that stay on the system (the patterns are matched against the file name)
 keep_on_system() {
@@ -65,7 +66,7 @@ done
 
 # the program and the libraries: the RUNPATH ($ORIGIN) - the loader looks there before the system's cache, and the
 # driver's libraries are not affected by it (a RUNPATH is not inherited by the dependencies)
-patchelf --set-rpath '$ORIGIN/../lib' "$BIN"
+patchelf --set-rpath "$RPATH" "$BIN"
 for f in "$LIBDIR"/*.so*; do
     [ -e "$f" ] || continue
     [ -L "$f" ] && continue
