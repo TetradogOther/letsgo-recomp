@@ -100,6 +100,18 @@ Isto gera tambem `build/lasgame.so` (o codigo do jogo).
 
 ## 6. Os pacotes: o `.deb` e o AppImage
 
+### Os dois de uma vez
+
+```bash
+tools/linux/build.sh                 # o .deb e o AppImage (o runtime, o gerador e o Zig sao feitos uma vez)
+tools/linux/build.sh --deb           # so o .deb
+tools/linux/build.sh --appimage      # so o AppImage
+tools/linux/build.sh --container     # os dois, dentro do contentor Debian 13 (o que a CI faz)
+```
+
+No fim, o script diz o que ficou em `build/dist/` (com o sha256 de cada pacote). Para uma release, com a versao
+fixa: `DEB_REVISION=1 tools/linux/build.sh`.
+
 ### O `.deb`
 
 ```bash

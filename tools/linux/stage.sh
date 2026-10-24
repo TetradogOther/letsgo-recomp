@@ -16,6 +16,12 @@ PKG_HELPER=$PKG_BUILD/helper
 # the package's own folder name (runtime/paths.h: the runtime looks for its files there)
 RT_PKG_DIR=$(sed -n 's/^#define RT_PKG_DIR "\(.*\)".*/\1/p' runtime/paths.h)
 
+# the caller's environment (the defaults are here: every script that sources this one gets them)
+WITH_ZIG=${WITH_ZIG:-1}       # the Zig compiler in the package
+WITH_HELPER=${WITH_HELPER:-1}  # the game code generator in the package
+JOBS=${JOBS:-$(nproc)}        # how many compilers at once
+DEPS=${DEPS:-}                # a prefix with SDL3 / FFmpeg / shaderc (the distribution's, by default: empty)
+
 # The architecture: the one of the machine, or the one asked for.
 pkg_arch() {
     ARCH=${ARCH:-$(dpkg --print-architecture)}

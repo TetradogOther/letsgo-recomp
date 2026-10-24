@@ -91,7 +91,8 @@ Sai `build/dist/letsgo-recomp-<versao>-x86_64.AppImage`. O script tambem aceita:
 Para um build que nao dependa do que a maquina tem instalado (o mesmo `.deb` e AppImage, sempre em Debian 13):
 
 ```bash
-tools/linux/build_container.sh appimage
+tools/linux/build_container.sh appimage     # so o AppImage
+tools/linux/build.sh --container             # os dois
 ```
 
 Mais em [COMPILAR-LINUX.md](COMPILAR-LINUX.md).

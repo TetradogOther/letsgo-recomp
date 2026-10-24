@@ -69,6 +69,7 @@ duas plataformas.
 | 2.4 | zig | `tools/fetch_zig.sh` ja suporta Linux (sha256 fixado). O "slim" (`tools/zig_slim.sh`) e so do Windows: em Linux o primeiro link demora ~13 s e o cache vai para a pasta de trabalho (e apagado), por isso nao se paga |
 | 2.5 | `tools/linux/build_deb.sh` | monta a arvore do pacote e chama o `dpkg-deb` |
 | 2.6 | `tools/linux/stage.sh` | a arvore comum aos dois pacotes (o runtime, o gerador, o Zig, os headers, os icones, a fonte, o `metainfo`) |
+| 2.7 | `tools/linux/build.sh` | um comando para os dois pacotes (o runtime, o gerador e o Zig sao feitos uma vez e usados pelos dois): `--deb`, `--appimage`, `--container`; no fim, o que ficou em `build/dist/` com o sha256 |
 
 ## 5. Fase 3 — os pacotes (feito, a afinar)
 

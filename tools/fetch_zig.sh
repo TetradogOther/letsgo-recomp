@@ -23,6 +23,13 @@ esac
 
 DL=build/zig-dl
 mkdir -p "$DL"
+
+# the zig for this target is already there (the packages share it: it is fetched once)
+if [ -x build/zig/zig ] && [ -f build/zig/.target ] && [ "$(cat build/zig/.target)" = "$TARGET" ]; then
+    echo "build/zig: zig $VER for $TARGET, $(du -sh build/zig | cut -f1) (already there)"
+    exit 0
+fi
+
 [ -f "$DL/$NAME.$EXT" ] || curl -fL --proto '=https' -o "$DL/$NAME.$EXT" "https://ziglang.org/download/$VER/$NAME.$EXT"
 GOT=$( (shasum -a 256 2>/dev/null || sha256sum) < "$DL/$NAME.$EXT" | cut -d' ' -f1)
 [ "$GOT" = "$SHA" ] || { echo "$NAME.$EXT: sha256 $GOT, expected $SHA"; exit 1; }
@@ -41,4 +48,5 @@ esac
 for d in "$L"/libc/include/*; do basename "$d" | grep -qE "$inc" || rm -rf "$d"; done
 for d in "$L"/libc/*; do n=$(basename "$d"); [ "$n" = include ] || echo "$n" | grep -qE "^($src)$" || rm -rf "$d"; done
 rm -rf "$L/libcxx" "$L/libcxxabi" "$L/libtsan" "$L/docs" build/zig/doc  # (lib/std stays: zig cc builds compiler_rt with it)
+echo "$TARGET" > build/zig/.target   # (which target it is: the next build does not fetch it again)
 echo "build/zig: zig $VER for $TARGET, $(du -sh build/zig | cut -f1)"
