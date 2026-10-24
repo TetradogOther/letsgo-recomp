@@ -98,10 +98,18 @@ void rt_paths_init(void) {
 #ifdef _WIN32
         snprintf(root, sizeof root, "%s", g_exe_dir);
 #elif defined(__linux__)
-        // (the AppImage is read-only): $XDG_DATA_HOME/lasrecomp, ~/.local/share/lasrecomp by default
+        // (the .deb and the AppImage are read-only): $XDG_DATA_HOME/letsgo-recomp, ~/.local/share/letsgo-recomp
         const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
-        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/lasrecomp", xdg);
-        else snprintf(root, sizeof root, "%s/.local/share/lasrecomp", home && *home ? home : "/tmp");
+        const char *base = xdg && *xdg == '/' ? xdg : (home && *home ? home : "/tmp");
+        if (xdg && *xdg == '/') snprintf(root, sizeof root, "%s/%s", xdg, RT_PKG_DIR);
+        else snprintf(root, sizeof root, "%s/.local/share/%s", base, RT_PKG_DIR);
+        {   // the first Linux builds used ~/.local/share/lasrecomp: the saves are kept there, so it is used if it is
+            // there and the new folder isn't (the same data, the .deb and the AppImage)
+            char old[1024];
+            if (xdg && *xdg == '/') snprintf(old, sizeof old, "%s/lasrecomp", xdg);
+            else snprintf(old, sizeof old, "%s/.local/share/lasrecomp", base);
+            if (!is_dir(root) && is_dir(old)) snprintf(root, sizeof root, "%s", old);
+        }
 #else
         const char *home = getenv("HOME");
         snprintf(root, sizeof root, "%s/Library/Application Support/" RT_BUNDLE_ID, home && *home ? home : "/tmp");
@@ -126,20 +134,24 @@ void rt_paths_init(void) {
 const char *rt_data_root(void) { return g_root; }
 
 bool rt_resource(const char *name, const char *dev_rel, char *out, size_t n) {
-    char c[5][1100] = {{0}};
+    char c[6][1100] = {{0}};
     if (name) {
         snprintf(c[0], sizeof c[0], "%s" SEP "%s", g_exe_dir, name);
         snprintf(c[1], sizeof c[1], "%s" SEP ".." SEP "Resources" SEP "%s", g_exe_dir, name);  // .app/Contents/Resources
-        // the Debian package: the program in <prefix>/bin, what it ships in <prefix>/share/letsgo-recomp
+        // the Debian package and the AppImage: the program in <prefix>/bin, what it ships in <prefix>/share/letsgo-recomp
+        // (the assets) and in <prefix>/lib/letsgo-recomp (the programs: the generator, the compiler - the ones that
+        // depend on the architecture go there, as the Debian policy says)
         const char *slash = strrchr(g_exe_dir, '/');
-        if (slash && !strcmp(slash + 1, "bin"))
+        if (slash && !strcmp(slash + 1, "bin")) {
             snprintf(c[4], sizeof c[4], "%s" SEP ".." SEP "share" SEP RT_PKG_DIR SEP "%s", g_exe_dir, name);
+            snprintf(c[5], sizeof c[5], "%s" SEP ".." SEP "lib" SEP RT_PKG_DIR SEP "%s", g_exe_dir, name);
+        }
     }
     if (dev_rel) {
         snprintf(c[2], sizeof c[2], "%s" SEP "%s", g_start, dev_rel);
         snprintf(c[3], sizeof c[3], "%s" SEP ".." SEP "%s", g_exe_dir, dev_rel);  // build/lasrecomp -> repo root
     }
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 6; i++)
         if (c[i][0] && exists(c[i])) return (size_t)snprintf(out, n, "%s", c[i]) < n;  // (as is: a venv python must stay a link)
     return false;
 }
