@@ -121,6 +121,7 @@ utilizador** (`exefs` + `romfs` de *Let's Go, Eevee!* ou *Pikachu!*).
 | O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
 | Os programas lancados pelo nome | ok (o `posix_spawn` nao procura no PATH: corrigido) |
 | O `lintian` | ok (sem queixas: `tools/linux/lintian.sh`) |
+| **A interface (e2e)** | ok (`tools/linux/ui_test.sh`: as cinco paginas da tela inicial e a captura das teclas, no `.deb` e no AppImage; as imagens sao as mesmas, PSNR 57 dB - so as riscas do fundo animado) |
 
 **Falta (precisa dos ficheiros do jogo):**
 

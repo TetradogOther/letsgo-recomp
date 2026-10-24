@@ -150,6 +150,19 @@ tools/linux/build_container.sh appimage     # so o AppImage
 
 Precisa de `podman` ou `docker`.
 
+## 6b. O teste de UI
+
+O `tools/linux/ui_test.sh` e o teste end-to-end da interface (a tela inicial), como o `tools/repro.sh` e o do jogo:
+percorre todas as paginas (Jogo, Graficos, Imagem e som, Controlos, Mods) e a captura das teclas, tira uma imagem de
+cada uma, faz a folha de contacto e falha se alguma execucao escrever um erro no log.
+
+```bash
+tools/linux/ui_test.sh                                        # o .deb / AppImage em build/dist
+tools/linux/ui_test.sh ./build/lasrecomp build/ui-test         # o build da arvore de codigo
+```
+
+Fica em `build/ui-test/` (as imagens, a folha de contacto e o relatorio). Nao precisa dos ficheiros do jogo.
+
 ## 7. Problemas comuns
 
 | Sintoma | O que fazer |
