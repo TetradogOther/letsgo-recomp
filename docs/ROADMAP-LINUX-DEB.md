@@ -18,7 +18,9 @@ fork era o *empacotamento* e algumas correcoes que a janela "Windows" do fork de
 | Execuao | abre a janela **"Let's Go Recomp"** (774x900) e renderiza o launcher (icone, fonte Baloo2, paginas) |
 | Vulkan | RADV 1.4.305 + lavapipe detectados; swapchain e aneis de memoria OK |
 | `tools/linux/build_deb.sh` | gera `build/dist/letsgo-recomp_0.6.0_amd64.deb` (57 MB) |
+| `tools/linux/build_appimage.sh` | gera `build/dist/letsgo-recomp_0.6.0_x86_64.AppImage` (o runtime, o gerador, o Zig e as libs) |
 | O `.deb` instalado | o binario de `/usr/bin` abre e renderiza (o icone vem de `/usr/share/letsgo-recomp/icon.png`) |
+| O AppImage | corre (com FUSE, ou a extrair-se quando nao ha FUSE) e abre o launcher |
 | O gerador (lasgen, PyInstaller) | corre no Linux (o `unicorn` e o `capstone` carregam) |
 | O codigo do jogo | compilado com o `zig` do pacote e carregado pelo runtime (as tabelas das quatro modulos) |
 
@@ -52,7 +54,7 @@ duas plataformas.
 |---|---|---|---|
 | 1.1 | **P0** | **feito**: `runtime/platform.h` + `platform/{linux,windows}.c` gained `plat_unpack()` (bsdtar, or the system's tar; on Windows, the same `tar.exe`); `runtime/mods.c` no longer calls `C:\Windows\System32\tar.exe` | — |
 | 1.2 | **P1** | **feito**: `runtime/ui2x.c` downloads the Linux release of the upscaler (sha256 checked) and unpacks it with `plat_unpack()` | — |
-| 1.3 | **P1** | **parcial**: `vk_display_hz()` reads the display mode's refresh (SDL) → the frame generation's "Auto" follows the screen. The *vblank grid* (the compositor's timing, Windows' DWM) has no Linux equivalent yet: the interpolated images are not snapped to the refresh | measure the grid from the presents, or leave it off (the feature is experimental) |
+| 1.3 | **P1** | **feito**: a "grelha" de vsync (o momento do ecra) nao tem equivalente no Linux como no Windows (o compositor nao a expoe), mas o driver sabe quando cada imagem chegou ao ecra (`VK_KHR_present_wait`, que o projecto ja usava para o log dos presents): e essa a blank que a mostrou. A geracao de frames usa-a como no Windows (`vblank_grid()`, `runtime/nvn/vulkan/device.c`); sem o driver's support, fica como estava | `LARECOMP_FG_NO_VSYNC_GRID=1` desliga |
 | 1.4 | **P2** | **decidido**: FSR 3.1 stays Windows-only (the SDK's Linux build is not in the package); the log says so and the upscaler falls back to FSR 1. The in-house 2x/3x/4x and FSR 1 work | revisit if the AMD SDK's Linux build is worth the weight |
 | 1.5 | **P1** | **decidido**: the package ships zig (as the Windows release does), so the player needs no compiler. `WITH_ZIG=0` builds a lighter package that depends on `clang` + `lld` | — |
 | 1.6 | **P3** | the Switch's online services stay offline (as on Windows) | — |
@@ -62,12 +64,13 @@ duas plataformas.
 | # | Tarefa | Estado |
 |---|---|---|
 | 2.1 | `tools/linux/Containerfile` | Debian 13 with the distribution's SDL3, FFmpeg, shaderc and Vulkan headers |
-| 2.2 | `tools/linux/build_container.sh` | builds the package in the container (podman or docker) |
+| 2.2 | `tools/linux/build_container.sh` | builds the packages in the container (podman or docker), with the user's own id (the files it writes belong to the user) |
 | 2.3 | o gerador congelado | `tools/lasgen.spec` ja e multi-plataforma (trata do `libunicorn.so.2`); o `build_deb.sh` monta-o com PyInstaller |
 | 2.4 | zig | `tools/fetch_zig.sh` ja suporta Linux (sha256 fixado). O "slim" (`tools/zig_slim.sh`) e so do Windows: em Linux o primeiro link demora ~13 s e o cache vai para a pasta de trabalho (e apagado), por isso nao se paga |
 | 2.5 | `tools/linux/build_deb.sh` | monta a arvore do pacote e chama o `dpkg-deb` |
+| 2.6 | `tools/linux/stage.sh` | a arvore comum aos dois pacotes (o runtime, o gerador, o Zig, os headers, os icones, a fonte, o `metainfo`) |
 
-## 5. Fase 3 — o pacote `.deb` (feito, a afinar)
+## 5. Fase 3 — os pacotes (feito, a afinar)
 
 | # | Tarefa | Estado |
 |---|---|---|
@@ -75,15 +78,30 @@ duas plataformas.
 | 3.2 | `debian/copyright` | DEP5: o pacote e **GPL-2+** (o FFmpeg do Debian e `--enable-gpl`; o codigo do projeto e MIT, compativel). As licences de cada componente |
 | 3.3 | `debian/changelog`, `debian/letsgo-recomp.desktop`, `debian/letsgo-recomp.1` | versao, entrada de menu, man page |
 | 3.4 | `runtime/paths.c` | `rt_resource()` procura tambem em `<prefix>/share/letsgo-recomp` (o pacote: o programa em `<prefix>/bin`, os dados em `<prefix>/share`) |
-| 3.5 | `lintian` | **por fazer** (o `lintian` nao esta instalado nesta maquina): `lintian build/dist/letsgo-recomp_0.6.0_amd64.deb` |
-| 3.6 | icones | `hicolor/scalable/apps` (SVG) e `hicolor/1024x1024` (PNG). Faltam os tamanhos normais (16..512) → `tools/make_icons.py` com `rsvg-convert` |
-| 3.7 | **a rever**: `Depends` com `libavcodec61` etc. fixa a versao do Debian 13; um `libavcodec62` (Debian 14) deixa de satisfazer a dependencia | `libavcodec61 | libavcodec62` (ou `>= 61` com risco) |
-| 3.8 | **a rever**: o pacote leva 238 MB de zig | alternativa: `WITH_ZIG=0` (depende do `clang`) |
+| 3.5 | `lintian` | corre na CI (o `lintian` esta no contentor) |
+| 3.6 | icones | `hicolor/scalable/apps` (SVG) e `hicolor/1024x1024` (PNG), e os tamanhos normais (16..512) |
+| 3.7 | `Depends` com `libavcodec61` etc. | corrigido: `libavcodec61 | libavcodec62` (e o mesmo para os outros) |
+| 3.8 | o pacote leva 238 MB de zig | alternativa: `WITH_ZIG=0` (depende do `clang`) |
+| 3.9 | a pasta dos dados | o codigo usava `~/.local/share/lasrecomp` e a documentacao prometia `~/.local/share/letsgo-recomp`: agora e `letsgo-recomp` (a pasta antiga e usada se for a que tem os saves) |
+| 3.10 | as mensagens de erro em portugues | a tabela estava desalinhada (as do fluxo `.nsp`, que saiu): corrigida, com um `static_assert` que nao deixa as tabelas divergirem |
+
+## 5b. Fase 3b — o AppImage (feito)
+
+Um ficheiro com tudo, que corre sem instalar nada, para qualquer distribuicao de 64 bits.
+
+| # | Tarefa | Estado |
+|---|---|---|
+| 3b.1 | `tools/linux/build_appimage.sh` | a arvore (a mesma do `.deb`, por `stage.sh`), o `AppRun`, e o ficheiro final: o runtime do AppImage com a imagem squashfs colada |
+| 3b.2 | `tools/fetch_appimage_runtime.sh` | o runtime do AppImage (AppImageKit), com o sha256 fixado |
+| 3b.3 | `tools/linux/bundle_libs.sh` | as bibliotecas dentro (SDL3, FFmpeg, shaderc e o que mais precisam), com o `patchelf`: o loader do Vulkan, as libs do driver, a stack X11/Wayland e a do audio sao as do sistema (o `RUNPATH` e do programa, para o driver nao ser afectado) |
+| 3b.4 | `debian/letsgo-recomp.metainfo.xml` | os metadados da aplicacao (AppStream), para a integracao com as lojas e os menus |
+| 3b.5 | a CI | `.github/workflows/packages.yml`: o `.deb` e o AppImage, em Debian 13 |
+| 3b.6 | `docs/APPIMAGE.md` | como usar, como compilar, o que fazer sem FUSE |
 
 ## 6. Fase 4 — testes (falta o ficheiro do jogo)
 
-O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiros proprios do utilizador**
-(`exefs` + `romfs` de *Let's Go, Eevee!* ou *Pikachu!*).
+O `.deb` (e o AppImage) so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiros proprios do
+utilizador** (`exefs` + `romfs` de *Let's Go, Eevee!* ou *Pikachu!*).
 
 **Ja testado sem o jogo:**
 
@@ -98,9 +116,11 @@ O `.deb` so esta "pronto" quando o jogo rodar de verdade. Precisa dos **ficheiro
 | O crash e o backtrace | ok (`FATAL: cannot load extracted/exefs/main` + backtrace) |
 | O `.deb` de dentro (`/usr/bin`) | ok (abre, desenha, o icone vem de `/usr/share`) |
 | **O `.deb` instalado no sistema** | ok (Debian 13, `sudo apt install`: o launcher abre com as libs do sistema, o icone, o gerador e o Zig do pacote a correr) |
+| **O AppImage** | ok (corre com FUSE ou a extrair-se; o launcher abre, o icone e a fonte vem de dentro) |
+| **O gerador e o compilador no pacote** | ok (o runtime encontra-os em `usr/lib/letsgo-recomp`: o log do setup diz o caminho) |
 | O codigo do Windows ainda compila | ok (`tools/linux/winsyntax.sh`: clang + headers do mingw) |
-
 | Os programas lancados pelo nome | ok (o `posix_spawn` nao procura no PATH: corrigido) |
+| O `lintian` | ok (sem queixas: `tools/linux/lintian.sh`) |
 
 **Falta (precisa dos ficheiros do jogo):**
 
@@ -133,9 +153,10 @@ consola) — por isso nao serve para o teste sem as chaves e sem um volcado comp
 |---|---|---|
 | 5.1 | `docs/COMPILAR-LINUX.md` | feito |
 | 5.2 | `docs/DEBIAN.md` | feito |
-| 5.3 | `README.md` | Linux na tabela de requisitos e a seccao do `.deb` |
-| 5.4 | `CHANGELOG.md` | entrada "Linux / Debian port" |
-| 5.5 | CI (opcional) | GitHub Actions a buildar o `.deb` em `debian:trixie` a cada push |
+| 5.3 | `docs/APPIMAGE.md` | feito (o AppImage) |
+| 5.4 | `README.md` | Linux na tabela de requisitos e a seccao do `.deb` e do AppImage |
+| 5.5 | `CHANGELOG.md` | entrada "Linux / Debian port" |
+| 5.6 | CI | GitHub Actions a buildar o `.deb` e o AppImage em `debian:trixie` a cada push |
 
 ## 8. Riscos
 
@@ -148,12 +169,14 @@ consola) — por isso nao serve para o teste sem as chaves e sem um volcado comp
 | Codigo do jogo gerado no CPU do utilizador | 20 min na 1.ª vez | e o mesmo fluxo do Windows; o zig vai no pacote (1.5) |
 | Sem `lld` na maquina de build | link falha | `LD=` (0.8) resolve; o contentor tem lld |
 | O jogo nunca foi jogado no Linux | pode haver falhas de runtime que so aparecem com o jogo | Fase 4: precisa dos ficheiros do utilizador |
+| O AppImage e feito em Debian 13 (glibc 2.38+) | nao corre em distros mais antigas | e o mesmo do `.deb`: a documentacao diz a partir de que distro vai |
+| As libs dentro do AppImage | podem divergir das do sistema | so o que e especifico da versao (SDL3, FFmpeg, shaderc); o Vulkan, o driver, o X11/Wayland e o audio sao os do sistema |
 
 ## 9. Ordem sugerida
 
 1. **Fase 0** (feito) — o build Linux compila, linka e abre.
 2. **Fase 1** (feito, excepto o grid de vsync) — mods, 2x, a taxa do ecra, o FSR 3.1 decidido.
-3. **Fase 2** (feito) — o contentor e as ferramentas: o `.deb` constroi-se de forma repetivel.
-4. **Fase 3** (feito, a afinar) — sai o primeiro `.deb` instalavel (57 MB).
-5. **Fase 4** — **o proximo passo**: com os ficheiros do jogo, testar o fluxo completo.
-6. **Fase 5** (feito) + `lintian` + os icones nos tamanhos normais.
+3. **Fase 2** (feito) — o contentor e as ferramentas: os pacotes constroi-se de forma repetivel.
+4. **Fase 3** (feito) — o `.deb` instalavel (57 MB) e o AppImage (Fase 3b).
+5. **Fase 4** — **o que falta**: com os ficheiros do jogo, testar o fluxo completo (o `.deb` e o AppImage).
+6. **Fase 5** (feito) + `lintian` (na CI) + os icones nos tamanhos normais.

@@ -98,7 +98,9 @@ Isto gera tambem `build/lasgame.so` (o codigo do jogo).
 - A primeira vez em cada area compila os shaders. Pode haver objetos aparecendo atrasados por um instante; da segunda
   vez em diante fica liso.
 
-## 6. O pacote `.deb`
+## 6. Os pacotes: o `.deb` e o AppImage
+
+### O `.deb`
 
 ```bash
 sudo apt install python3-pip dpkg-dev
@@ -113,8 +115,40 @@ Gera `build/dist/letsgo-recomp-<versao>-amd64.deb`. O script:
 4. monta a arvore do pacote (o programa, os dados, o icone, a fonte, a entrada de menu, a man page);
 5. `dpkg-deb --build`.
 
-Opcoes: `WITH_ZIG=0` (o pacote depende do `clang` do sistema em vez de levar o Zig), `WITH_HELPER=0` (sem o
-gerador), `ARCH=arm64`, `JOBS=<n>`, `DEPS=<prefix>` (uma pasta com SDL3 / FFmpeg / shaderc para ligar contra).
+### O AppImage
+
+```bash
+sudo apt install squashfs-tools patchelf
+tools/linux/build_appimage.sh
+```
+
+Gera `build/dist/letsgo-recomp-<versao>-x86_64.AppImage`: um ficheiro com o runtime, o gerador, o Zig, os headers e
+as bibliotecas de que o programa precisa (o loader do Vulkan e as libs do driver sao os do sistema). Ver
+[APPIMAGE.md](APPIMAGE.md) para o usar.
+
+### As opcoes (as duas)
+
+| Opcao | O que faz |
+|---|---|
+| `WITH_ZIG=0` | o Zig nao vai dentro: o codigo do jogo e compilado com o `clang` do sistema (o pacote fica muito menor) |
+| `WITH_HELPER=0` | o gerador nao vai dentro: o pacote so mostra o launcher |
+| `BUNDLE_LIBS=0` | (so no AppImage) as bibliotecas ficam as do sistema, como no `.deb`: o ficheiro fica muito menor, mas precisa de `libsdl3-0` e FFmpeg instalados |
+| `DEB_REVISION=<r>` | (so no `.deb`) a versao do pacote, em vez da que muda a cada build |
+| `ARCH=arm64` | para Raspberry Pi e outros ARM de 64 bits |
+| `JOBS=<n>` | quantos compiladores ao mesmo tempo |
+| `DEPS=<prefix>` | uma pasta com SDL3 / FFmpeg / shaderc para ligar contra |
+
+### Sem depender do que a maquina tem instalado
+
+O contentor (Debian 13) constroi os dois pacotes sempre iguais, seja qual for a distribuicao da maquina:
+
+```bash
+tools/linux/build_container.sh              # os dois
+tools/linux/build_container.sh deb          # so o .deb
+tools/linux/build_container.sh appimage     # so o AppImage
+```
+
+Precisa de `podman` ou `docker`.
 
 ## 7. Problemas comuns
 

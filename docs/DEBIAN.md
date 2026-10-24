@@ -4,6 +4,9 @@ O pacote `.deb` leva o runtime (o launcher e o que substitui o Switch), o gerado
 com que esse codigo e compilado na tua maquina, os headers do codigo do jogo, o icone e a fonte do menu. **Nao leva
 os ficheiros do jogo**: precisas da tua propria copia, extraida.
 
+> Nao usas Debian ou Ubuntu? O **AppImage** e a mesma coisa num ficheiro unico, sem instalar nada:
+> [APPIMAGE.md](APPIMAGE.md).
+
 ## Requisitos
 
 - Debian 13 ("trixie") ou Ubuntu 24.04, 64 bits (o pacote e construido com glibc 2.38 ou mais novo)
@@ -65,6 +68,9 @@ Tudo o que o programa escreve fica em `$XDG_DATA_HOME/letsgo-recomp` (`~/.local/
 | `lasrecomp.log` | o log (a execucao anterior fica em `lasrecomp-prev.log`) |
 
 Para usar outra pasta: `LARECOMP_DATA_ROOT=<pasta> letsgo-recomp`.
+
+O **AppImage** usa a mesma pasta (`~/.local/share/letsgo-recomp`), para que se troques de um para o outro sem perder
+os saves.
 
 ## Controladores
 

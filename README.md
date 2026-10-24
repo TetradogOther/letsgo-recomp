@@ -80,17 +80,25 @@ one folder each.
 
 ### On Linux (experimental)
 
-A Debian package is built from this repository (`tools/linux/build_deb.sh`): the runtime, the game code generator, the
-compiler the game code is built with, the window icon and the start screen font. No game files.
+Two packages are built from this repository: a **Debian package** (`tools/linux/build_deb.sh`) and an **AppImage**
+(`tools/linux/build_appimage.sh`). Both carry the runtime, the game code generator, the compiler the game code is
+built with, the window icon and the start screen font. No game files.
 
 ```bash
 sudo apt install ./letsgo-recomp_0.6.0_amd64.deb
 ```
 
-It installs **Let's Go Recomp** in the applications menu; everything it writes stays in
-`$XDG_DATA_HOME/letsgo-recomp` (`~/.local/share/letsgo-recomp`). [docs/DEBIAN.md](docs/DEBIAN.md) has the details and
-what does not work there yet (FSR 3.1, the frame generation's alignment with the screen); to build from the source
-instead, [docs/COMPILAR-LINUX.md](docs/COMPILAR-LINUX.md).
+or, for any 64-bit distribution (nothing to install):
+
+```bash
+chmod +x LetsGoRecomp-0.6.0-x86_64.AppImage && ./LetsGoRecomp-0.6.0-x86_64.AppImage
+```
+
+The package installs **Let's Go Recomp** in the applications menu; the AppImage runs from wherever you put it. In
+both, everything the program writes stays in `$XDG_DATA_HOME/letsgo-recomp` (`~/.local/share/letsgo-recomp`).
+[docs/DEBIAN.md](docs/DEBIAN.md) and [docs/APPIMAGE.md](docs/APPIMAGE.md) have the details and what does not work
+there yet (FSR 3.1, the frame generation's alignment with the screen); to build from the source instead,
+[docs/COMPILAR-LINUX.md](docs/COMPILAR-LINUX.md).
 
 ## Mods
 

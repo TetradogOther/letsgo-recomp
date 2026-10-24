@@ -2,9 +2,16 @@
 
 ## Unreleased (Linux / Debian port)
 
-The runtime now builds and runs on Linux, and there is a Debian package. The game itself has not been played through
-on Linux yet (it needs the player's own game files); see [docs/ROADMAP-LINUX-DEB.md](docs/ROADMAP-LINUX-DEB.md).
+The runtime now builds and runs on Linux, and there is a Debian package and an AppImage. The game itself has not been
+played through on Linux yet (it needs the player's own game files); see
+[docs/ROADMAP-LINUX-DEB.md](docs/ROADMAP-LINUX-DEB.md).
 
+- **An AppImage** (`tools/linux/build_appimage.sh`): one file with the runtime, the game code generator, the Zig
+  compiler and the libraries the program needs (SDL3, FFmpeg, shaderc), for any 64-bit distribution, with nothing to
+  install: `chmod +x LetsGoRecomp-<version>-x86_64.AppImage`. The Vulkan loader, the driver's own libraries and the
+  X11 / Wayland / audio stacks stay the system's, so the driver is never in the way. It uses the same data folder as
+  the Debian package (`~/.local/share/letsgo-recomp`), so moving from one to the other keeps the saves. See
+  [docs/APPIMAGE.md](docs/APPIMAGE.md).
 - **The runtime builds on Linux** (Debian 13, Ubuntu 24.04): the code that only compiled on Windows was fixed (the
   missing includes, `SDL_LoadPNG` / `SDL_SavePNG` - which needed SDL3_image, a dependency nothing declared - now go
   through the stb_image copy the project already ships, the FidelityFX header's `__declspec` outside MSVC), the
@@ -19,6 +26,18 @@ on Linux yet (it needs the player's own game files); see [docs/ROADMAP-LINUX-DEB
   unpacked the same way.
 - **The display's refresh rate on Linux**: it was unknown outside Windows (the frame generation's "Auto" assumed
   60 Hz); it is now read from the display's mode (SDL), so the multiplier follows the screen.
+- **The data folder on Linux**: it was `~/.local/share/lasrecomp` in the code and `~/.local/share/letsgo-recomp` in the
+  documentation; it is now the second one everywhere (the first is still used if it is the one with the saves).
+- **The frame generation's grid on Linux**: the compositor's timing (what Windows' DWM gives) has no equivalent here,
+  but the driver knows when each window image reached the screen (`VK_KHR_present_wait`, which the project already
+  used for the present log) - that is the vertical blank that showed it. The in-between images are snapped to the
+  display's refresh like on Windows (`LARECOMP_FG_NO_VSYNC_GRID=1` turns it off).
+- **The Debian package passes lintian without a single complaint** (`tools/linux/lintian.sh`): the generator and the
+  compiler moved to `/usr/lib/letsgo-recomp` (the ones that depend on the architecture do not go in `/usr/share`), the
+  manual page is compressed, the program is stripped, the copyright and the changelog are in the documentation folder,
+  and the AppStream metadata has the reverse domain name the specifications ask for.
+- **The start screen's error messages in Portuguese** were the ones of the `.nsp` flow (which is gone): each failure
+  shows its own message now, and a check at build time keeps the two tables in step.
 
 ## 0.6.0 (2026-10-22)
 
