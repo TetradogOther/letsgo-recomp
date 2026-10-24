@@ -21,13 +21,13 @@ Fedora, Arch...), nao so para as que temem um pacote.
 2. Dale permissao de execucao:
 
    ```bash
-   chmod +x LetsGoRecomp-0.6.0-x86_64.AppImage
+   chmod +x LetsGoRecomp-0.6.1-x86_64.AppImage
    ```
 
 3. Executa-o:
 
    ```bash
-   ./LetsGoRecomp-0.6.0-x86_64.AppImage
+   ./LetsGoRecomp-0.6.1-x86_64.AppImage
    ```
 
 Depois, o launcher abre: clica em **Selecionar pasta do jogo...** e escolhe a pasta com a tua copia extraida (a que
@@ -55,13 +55,13 @@ O AppImage monta-se a si mesmo com FUSE. Se a tua distribuicao nao o trouxer (ou
 ou de um `chroot`), o proprio AppImage extrai-se e corre:
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./LetsGoRecomp-0.6.0-x86_64.AppImage
+APPIMAGE_EXTRACT_AND_RUN=1 ./LetsGoRecomp-0.6.1-x86_64.AppImage
 ```
 
 Ou, para sempre, num terminal:
 
 ```bash
-./LetsGoRecomp-0.6.0-x86_64.AppImage --appimage-extract
+./LetsGoRecomp-0.6.1-x86_64.AppImage --appimage-extract
 ./squashfs-root/usr/bin/letsgo-recomp
 ```
 

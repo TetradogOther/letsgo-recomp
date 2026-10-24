@@ -17,7 +17,7 @@ os ficheiros do jogo**: precisas da tua propria copia, extraida.
 ## Instalar
 
 ```bash
-sudo apt install ./letsgo-recomp_0.6.0_amd64.deb
+sudo apt install ./letsgo-recomp_0.6.1_amd64.deb
 ```
 
 Depois, **Let's Go Recomp** aparece no menu de aplicacoes. Tambem pode ser lancado pela linha de comandos:

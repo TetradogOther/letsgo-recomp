@@ -85,13 +85,13 @@ Two packages are built from this repository: a **Debian package** (`tools/linux/
 built with, the window icon and the start screen font. No game files.
 
 ```bash
-sudo apt install ./letsgo-recomp_0.6.0_amd64.deb
+sudo apt install ./letsgo-recomp_0.6.1_amd64.deb
 ```
 
 or, for any 64-bit distribution (nothing to install):
 
 ```bash
-chmod +x LetsGoRecomp-0.6.0-x86_64.AppImage && ./LetsGoRecomp-0.6.0-x86_64.AppImage
+chmod +x LetsGoRecomp-0.6.1-x86_64.AppImage && ./LetsGoRecomp-0.6.1-x86_64.AppImage
 ```
 
 The package installs **Let's Go Recomp** in the applications menu; the AppImage runs from wherever you put it. In

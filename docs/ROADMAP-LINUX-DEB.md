@@ -17,8 +17,8 @@ fork era o *empacotamento* e algumas correcoes que a janela "Windows" do fork de
 | `make` (link do runtime) | linka (`build/lasrecomp`, 7,7 MB) |
 | Execuao | abre a janela **"Let's Go Recomp"** (774x900) e renderiza o launcher (icone, fonte Baloo2, paginas) |
 | Vulkan | RADV 1.4.305 + lavapipe detectados; swapchain e aneis de memoria OK |
-| `tools/linux/build_deb.sh` | gera `build/dist/letsgo-recomp_0.6.0_amd64.deb` (57 MB) |
-| `tools/linux/build_appimage.sh` | gera `build/dist/letsgo-recomp_0.6.0_x86_64.AppImage` (o runtime, o gerador, o Zig e as libs) |
+| `tools/linux/build_deb.sh` | gera `build/dist/letsgo-recomp_0.6.1_amd64.deb` (57 MB) |
+| `tools/linux/build_appimage.sh` | gera `build/dist/letsgo-recomp_0.6.1_x86_64.AppImage` (o runtime, o gerador, o Zig e as libs) |
 | O `.deb` instalado | o binario de `/usr/bin` abre e renderiza (o icone vem de `/usr/share/letsgo-recomp/icon.png`) |
 | O AppImage | corre (com FUSE, ou a extrair-se quando nao ha FUSE) e abre o launcher |
 | O gerador (lasgen, PyInstaller) | corre no Linux (o `unicorn` e o `capstone` carregam) |
@@ -127,7 +127,7 @@ utilizador** (`exefs` + `romfs` de *Let's Go, Eevee!* ou *Pikachu!*).
 
 | # | Teste | Criterio de aceitacao |
 |---|---|---|
-| 4.1 | instalacao limpa | `sudo apt install ./letsgo-recomp_0.6.0_amd64.deb` → o programa no menu; os dados em `~/.local/share/letsgo-recomp` |
+| 4.1 | instalacao limpa | `sudo apt install ./letsgo-recomp_0.6.1_amd64.deb` → o programa no menu; os dados em `~/.local/share/letsgo-recomp` |
 | 4.2 | set up | o launcher encontra a pasta do jogo, copia, gera o codigo e compila (zig) sem erros; o log sem `failed` |
 | 4.3 | arranque do jogo | menu, overworld, batalha, captura; saves em `~/.local/share/letsgo-recomp/save` |
 | 4.4 | F12 (menu no jogo) | abre, as paginas, aplica na hora |

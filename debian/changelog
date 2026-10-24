@@ -1,3 +1,16 @@
+letsgo-recomp (0.6.1-1) unstable; urgency=medium
+
+  * Port nativo para Linux: o runtime compila, linka e corre no Debian (Vulkan).
+  * O empacotamento: o pacote .deb e o AppImage, com o runtime, o gerador do
+    codigo do jogo, o compilador (zig) e os headers com que o codigo do jogo e
+    compilado na maquina de quem joga. Os ficheiros do jogo nao vao no pacote.
+  * Mods e a interface 2x passam a funcionar no Linux (bsdtar, o release
+    linux do upscaler).
+  * A geracao de frames usa a grelha do ecra (o driver sabe quando cada
+    imagem chegou ao ecra), como no Windows.
+
+ -- Gabriel Cortés <gabriel.cat.developer@gmail.com>  Sat, 24 Oct 2026 16:00:00 +0200
+
 letsgo-recomp (0.6.0-1) unstable; urgency=medium
 
   * Port nativo para Linux: o runtime compila, linka e corre no Debian (Vulkan).

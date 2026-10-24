@@ -50,7 +50,7 @@
     <keyword>picachu</keyword>
   </keywords>
   <releases>
-    <release version="0.6.0" date="2026-10-22">
+    <release version="0.6.1" date="2026-10-24">
       <description>
         <p>The Linux port: the runtime builds and runs on Debian 13 and Ubuntu 24.04, and there is a Debian package
         and an AppImage.</p>

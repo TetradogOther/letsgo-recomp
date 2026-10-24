@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (Linux / Debian port)
+## 0.6.1 (2026-10-24) — the Linux port
 
 The runtime now builds and runs on Linux, and there is a Debian package and an AppImage. The game itself has not been
 played through on Linux yet (it needs the player's own game files); see
