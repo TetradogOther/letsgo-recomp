@@ -19,8 +19,8 @@ tem um port Linux pronto); o que falta no Windows e o que este documento explica
 
 ```bash
 sudo apt update
-sudo apt install clang lld make pkg-config python3-venv libsdl3-dev libavformat-dev libavcodec-dev \
-    libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
+sudo apt install clang lld make pkg-config python3-venv python3-pip libpython3-dev libsdl3-dev libavformat-dev \
+    libavcodec-dev libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
     libarchive-tools curl file
 ```
 
@@ -155,6 +155,7 @@ Precisa de `podman` ou `docker`.
 | Sintoma | O que fazer |
 |---|---|
 | `SDL3/SDL.h` nao encontrado | `sudo apt install libsdl3-dev` (ou `make DEPS=<prefix>`) |
+| `Python shared library ('libpython3.13.so.1.0') was not found` | `sudo apt install libpython3-dev` (o PyInstaller precisa da biblioteca partilhada do Python) |
 | `libshaderc.so` nao encontrado | `sudo apt install libshaderc-dev` (ou `make SHADERC=-lshaderc_shared`) |
 | `invalid linker name in argument '-fuse-ld=lld'` | `sudo apt install lld` (ou `make LD=`) |
 | tela preta ou erro de Vulkan | atualiza o driver da GPU; precisa de Vulkan 1.3 (`vulkaninfo --summary`) |

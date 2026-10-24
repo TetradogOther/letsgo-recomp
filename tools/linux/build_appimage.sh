@@ -6,9 +6,9 @@
 # anything else on the system but a Vulkan 1.3 driver (and the usual desktop libraries).
 #
 # What it needs:
-#   sudo apt install clang lld make pkg-config python3-venv pipx libsdl3-dev libavformat-dev libavcodec-dev
-#     libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev libarchive-tools
-#     squashfs-tools patchelf file
+#   sudo apt install clang lld make pkg-config python3-venv python3-pip libpython3-dev libsdl3-dev libavformat-dev
+#     libavcodec-dev libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev
+#     libarchive-tools squashfs-tools patchelf file
 #
 # What it does:
 #   1. the runtime (the launcher and everything that stands in for the Switch);

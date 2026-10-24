@@ -73,9 +73,9 @@ nao deixar nada.
 ## Compilar a partir do codigo
 
 ```bash
-sudo apt install clang lld make pkg-config python3-venv pipx libsdl3-dev libavformat-dev libavcodec-dev \
-    libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev libarchive-tools \
-    squashfs-tools patchelf file
+sudo apt install clang lld make pkg-config python3-venv python3-pip libpython3-dev libsdl3-dev libavformat-dev \
+    libavcodec-dev libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev \
+    libarchive-tools squashfs-tools patchelf file
 tools/linux/build_appimage.sh
 ```
 

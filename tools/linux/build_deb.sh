@@ -2,9 +2,9 @@
 # tools/linux/build_deb.sh: the Debian package, build/dist/letsgo-recomp-<version>-<arch>.deb
 #
 # What it needs (Debian 13 "trixie" or Ubuntu 24.04):
-#   sudo apt install clang lld make pkg-config python3-venv pipx libsdl3-dev libavformat-dev libavcodec-dev
-#     libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev libarchive-tools
-#     dpkg-dev file
+#   sudo apt install clang lld make pkg-config python3-venv python3-pip libpython3-dev libsdl3-dev libavformat-dev
+#     libavcodec-dev libavutil-dev libswscale-dev libvulkan-dev libshaderc-dev libvulkan-memory-allocator-dev
+#     libarchive-tools dpkg-dev file
 #
 # What it does:
 #   1. the runtime (the launcher and everything that stands in for the Switch) - against the distribution's
