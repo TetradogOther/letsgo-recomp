@@ -28,10 +28,16 @@ $ENGINE build -q -t localhost/letsgo-recomp-build:debian13 -f tools/linux/Contai
 # the container runs with the user's own id, so the files it writes in the checkout belong to the user (and not to
 # root): HOME and the caches go to a temporary folder, which everyone can write
 build() {
+    local env=()
+    local v
+    for v in WITH_ZIG WITH_HELPER BUNDLE_LIBS DEB_REVISION JOBS ARCH DEPS; do
+        [ -n "${!v:-}" ] && env+=(-e "$v=${!v}")
+    done
     $RUN -v "$PWD:/src" -w /src \
         -u "$(id -u):$(id -g)" \
         -e HOME=/tmp -e TMPDIR=/tmp \
         -e ZIG_GLOBAL_CACHE_DIR=/tmp/zig-cache -e ZIG_LOCAL_CACHE_DIR=/tmp/zig-cache \
+        "${env[@]}" \
         localhost/letsgo-recomp-build:debian13 "$@"
 }
 
